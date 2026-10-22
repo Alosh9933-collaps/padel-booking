@@ -157,3 +157,49 @@ class BookingApiTests(ApiTestBase):
         response = self.client.get(reverse("booking-list"), {"date": DAY})
         data = response.data["results"] if "results" in response.data else response.data
         self.assertEqual([b["customer_name"] for b in data], ["Mine"])
+
+class BookingChangeTests(ApiTestBase):
+    def setUp(self):
+        super().setUp()
+        self.booking = create_booking(
+            court=self.court_a, start_at=msk(10), end_at=msk(12), customer_name="Ali"
+        )
+
+    def patch(self, booking=None, **data):
+        return self.client.patch(
+            reverse("booking-detail", args=[(booking or self.booking).pk]), data, format="json"
+        )
+
+    def test_extend_reprices_the_booking(self):
+        response = self.patch(end_at=f"{DAY}T12:30:00+03:00")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Decimal(response.data["price"]), Decimal("5000.00"))
+
+    def test_shorten_and_move_the_start(self):
+        response = self.patch(start_at=f"{DAY}T10:15:00+03:00", end_at=f"{DAY}T11:15:00+03:00")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Decimal(response.data["price"]), Decimal("2000.00"))
+
+    def test_extending_into_another_booking_returns_409(self):
+        create_booking(court=self.court_a, start_at=msk(12), end_at=msk(13), customer_name="Next")
+        response = self.patch(end_at=f"{DAY}T12:30:00+03:00")
+        self.assertEqual(response.status_code, 409)
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.end_at, msk(12))
+
+    def test_outside_hours_returns_400(self):
+        self.assertEqual(self.patch(start_at=f"{DAY}T07:00:00+03:00").status_code, 400)
+
+    def test_customer_details_can_be_fixed(self):
+        response = self.patch(customer_name="Ali S.", customer_phone="+7 999")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["customer_name"], "Ali S.")
+        self.assertEqual(Decimal(response.data["price"]), Decimal("4000.00"))
+
+    def test_cannot_change_a_booking_of_another_club(self):
+        other = create_booking(court=self.court_b, start_at=msk(10), end_at=msk(11), customer_name="X")
+        self.assertEqual(self.patch(other, customer_name="Hacked").status_code, 404)
+
+    def test_cancelled_booking_cannot_be_changed(self):
+        self.client.post(reverse("booking-cancel", args=[self.booking.pk]))
+        self.assertEqual(self.patch(end_at=f"{DAY}T12:30:00+03:00").status_code, 400)

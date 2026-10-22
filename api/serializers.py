@@ -150,6 +150,7 @@ class BookingSerializer(serializers.ModelSerializer):
             "customer_phone",
             "price",
             "status",
+            "is_open",
             "created_at",
             "cancelled_at",
         )
@@ -174,6 +175,24 @@ class BookingCreateSerializer(serializers.Serializer):
             self.fields["court"].queryset = Court.objects.filter(
                 club__in=clubs_of(user)
             ).select_related("club")
+
+
+class BookingChangeSerializer(serializers.Serializer):
+    start_at = serializers.DateTimeField(required=False)
+    end_at = serializers.DateTimeField(required=False)
+    customer_name = serializers.CharField(max_length=120, required=False)
+    customer_phone = serializers.CharField(max_length=32, required=False, allow_blank=True)
+
+
+class OpenSessionStartSerializer(BookingCreateSerializer):
+    start_at = None
+    end_at = None
+
+
+class QuoteSerializer(serializers.Serializer):
+    start = serializers.DateTimeField()
+    end = serializers.DateTimeField()
+    price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
 
 
 class RevenueByCourtSerializer(serializers.Serializer):

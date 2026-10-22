@@ -24,6 +24,9 @@ class Booking(models.Model):
     # Price is frozen at booking time so later price changes never rewrite history.
     price = models.DecimalField(max_digits=10, decimal_places=2)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.CONFIRMED)
+    # Open play: started without an end time. While open, end_at holds the court
+    # until closing time and price stays 0; stopping sets the real end and price.
+    is_open = models.BooleanField(default=False)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )

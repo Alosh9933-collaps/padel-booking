@@ -49,6 +49,11 @@ class PricingTests(TestCase):
         price = calculate_price(self.court, msk(16, 30), msk(18))
         self.assertEqual(price, Decimal("4000.00"))
 
+    def test_price_by_the_minute_across_two_rules(self):
+        # 16:40-17:00 at 2000/h = 666.67, 17:00-17:20 at 3000/h = 1000
+        price = calculate_price(self.court, msk(16, 40), msk(17, 20))
+        self.assertEqual(price, Decimal("1666.67"))
+
     def test_court_specific_rule_wins_on_tie(self):
         PriceRule.objects.create(
             club=self.club,
@@ -108,9 +113,14 @@ class BookingRuleTests(TestCase):
     def test_booking_until_midnight_is_allowed(self):
         self.book(msk(23), msk(0, day=3))
 
-    def test_off_grid_time_is_rejected(self):
+    def test_any_minute_is_allowed_and_priced_by_the_minute(self):
+        # 75 minutes at 2000/h
+        booking = self.book(msk(10, 10), msk(11, 25))
+        self.assertEqual(booking.price, Decimal("2500.00"))
+
+    def test_seconds_are_rejected(self):
         with self.assertRaises(InvalidBookingTime):
-            self.book(msk(10, 10), msk(11, 10))
+            self.book(msk(10, 0), datetime(2026, 11, 2, 11, 0, 30, tzinfo=MSK))
 
     def test_naive_datetimes_are_rejected(self):
         with self.assertRaises(InvalidBookingTime):

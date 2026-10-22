@@ -17,17 +17,30 @@ from rest_framework.views import APIView
 
 from bookings.availability import get_availability
 from bookings.models import Booking
-from bookings.services import BookingError, SlotUnavailable, cancel_booking, create_booking
+from bookings.services import (
+    BookingError,
+    SlotUnavailable,
+    calculate_price,
+    cancel_booking,
+    change_booking,
+    create_booking,
+    start_open_session,
+    stop_open_session,
+    validate_window,
+)
 from clubs.access import can_manage, clubs_of, managed_clubs_of
 from clubs.models import Club, Court, Membership, PriceRule
 
 from .serializers import (
     AvailabilitySerializer,
+    BookingChangeSerializer,
     BookingCreateSerializer,
     BookingSerializer,
     ClubSerializer,
     CourtSerializer,
+    OpenSessionStartSerializer,
     PriceRuleSerializer,
+    QuoteSerializer,
     RevenueReportSerializer,
 )
 
@@ -124,6 +137,27 @@ class CourtViewSet(
             "slots": slots,
         }
         return Response(AvailabilitySerializer(payload).data)
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("start", str, required=True, description="ISO 8601 with offset"),
+            OpenApiParameter("end", str, required=True, description="ISO 8601 with offset"),
+        ],
+        responses=QuoteSerializer,
+        description="Price of a booking before making it. Does not check whether the court is free.",
+    )
+    @action(detail=True, methods=["get"])
+    def quote(self, request, pk=None):
+        court = self.get_object()
+        query = QuoteSerializer(data=request.query_params)
+        query.is_valid(raise_exception=True)
+        start, end = query.validated_data["start"], query.validated_data["end"]
+        try:
+            validate_window(court, start, end)
+            price = calculate_price(court, start, end)
+        except BookingError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(QuoteSerializer({"start": start, "end": end, "price": price}).data)
 
 
 class PriceRuleViewSet(ManagedByClubMixin, viewsets.ModelViewSet):
@@ -231,11 +265,68 @@ class BookingViewSet(
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(BookingSerializer(booking).data, status=status.HTTP_201_CREATED)
 
+    @extend_schema(
+        request=BookingChangeSerializer,
+        responses=BookingSerializer,
+        description=(
+            "Extend, shorten or move a booking, or fix the customer details. A new time is "
+            "re-priced. Returns 409 when the new time overlaps another booking."
+        ),
+    )
+    def partial_update(self, request, pk=None):
+        booking = self.get_object()
+        serializer = BookingChangeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            change_booking(booking, **serializer.validated_data)
+        except SlotUnavailable as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except BookingError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(BookingSerializer(booking).data)
+
     @extend_schema(request=None, responses=BookingSerializer)
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
         booking = self.get_object()
         cancel_booking(booking)
+        return Response(BookingSerializer(booking).data)
+
+    @extend_schema(
+        request=OpenSessionStartSerializer,
+        responses={201: BookingSerializer},
+        description=(
+            "Start open play now, with no end time. The court is held until closing time "
+            "until the session is stopped. Returns 409 when the court is booked later today."
+        ),
+    )
+    @action(detail=False, methods=["post"], url_path="open")
+    def start_open(self, request):
+        serializer = OpenSessionStartSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            booking = start_open_session(
+                court=data["court"],
+                customer_name=data["customer_name"],
+                customer_phone=data["customer_phone"],
+                created_by=request.user,
+            )
+        except SlotUnavailable as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except BookingError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(BookingSerializer(booking).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(request=None, responses=BookingSerializer)
+    @action(detail=True, methods=["post"])
+    def stop(self, request, pk=None):
+        """End open play now and charge the exact minutes played."""
+        booking = self.get_object()
+        try:
+            stop_open_session(booking)
+        except BookingError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(BookingSerializer(booking).data)
 
 
@@ -273,6 +364,7 @@ class RevenueReportView(APIView):
         bookings = Booking.objects.filter(
             court__club=club,
             status=Booking.Status.CONFIRMED,
+            is_open=False,  # running open play has no price yet
             start_at__gte=datetime.combine(date_from, time(0), tzinfo=tz),
             start_at__lt=datetime.combine(date_to + timedelta(days=1), time(0), tzinfo=tz),
         )
