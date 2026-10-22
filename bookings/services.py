@@ -2,13 +2,16 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.db.models import Q
 from django.utils import timezone
 
 from clubs.models import PriceRule
 
 from .models import Booking
+
+# First key of the two-key Postgres advisory lock taken per court while booking.
+COURT_LOCK_NAMESPACE = 7201
 
 
 class BookingError(Exception):
@@ -105,6 +108,12 @@ def create_booking(*, court, start_at, end_at, customer_name, customer_phone="",
         # The inner atomic() makes this a savepoint, so a rejected insert never
         # poisons an outer transaction (for example the one a request runs in).
         with transaction.atomic():
+            # Parallel inserts checking the same exclusion constraint can deadlock.
+            # Queueing bookings per court avoids that; the constraint still decides.
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(%s, %s)", [COURT_LOCK_NAMESPACE, court.pk]
+                )
             return Booking.objects.create(
                 court=court,
                 start_at=start_at,

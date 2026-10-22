@@ -1,25 +1,38 @@
 from datetime import date as date_type
+from datetime import datetime, time, timedelta
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from django.db.models import Count, OuterRef, Subquery, Sum
+from django.db.models.functions import TruncDate
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.permissions import SAFE_METHODS, BasePermission, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from bookings.availability import get_availability
 from bookings.models import Booking
 from bookings.services import BookingError, SlotUnavailable, cancel_booking, create_booking
-from clubs.access import clubs_of
-from clubs.models import Court
+from clubs.access import can_manage, clubs_of, managed_clubs_of
+from clubs.models import Club, Court, Membership, PriceRule
 
 from .serializers import (
     AvailabilitySerializer,
     BookingCreateSerializer,
     BookingSerializer,
+    ClubSerializer,
     CourtSerializer,
+    PriceRuleSerializer,
+    RevenueReportSerializer,
 )
+
+MANAGERS_ONLY = "Only the club's owner or manager can do this."
+MAX_REPORT_DAYS = 366
 
 
 def parse_date(raw, field="date"):
@@ -29,7 +42,44 @@ def parse_date(raw, field="date"):
         raise ValidationError({field: "Use the format YYYY-MM-DD."})
 
 
-class CourtViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class IsClubManagerOrReadOnly(BasePermission):
+    """Every member of a club can read; only owners and managers can write."""
+
+    message = MANAGERS_ONLY
+
+    def has_permission(self, request, view):
+        if request.method != "POST":
+            return True
+        # Creating needs a managed club somewhere; the exact club is checked
+        # once the payload is validated (see ManagedByClubMixin.perform_create).
+        return managed_clubs_of(request.user).exists()
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        club = obj if isinstance(obj, Club) else obj.club
+        return can_manage(request.user, club)
+
+
+class ManagedByClubMixin:
+    permission_classes = [IsAuthenticated, IsClubManagerOrReadOnly]
+
+    def perform_create(self, serializer):
+        if not can_manage(self.request.user, serializer.validated_data["club"]):
+            raise PermissionDenied(MANAGERS_ONLY)
+        serializer.save()
+
+
+class CourtViewSet(
+    ManagedByClubMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Courts are never deleted because bookings point at them; set is_active=false instead."""
+
     serializer_class = CourtSerializer
 
     def get_queryset(self):
@@ -74,6 +124,49 @@ class CourtViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
             "slots": slots,
         }
         return Response(AvailabilitySerializer(payload).data)
+
+
+class PriceRuleViewSet(ManagedByClubMixin, viewsets.ModelViewSet):
+    """Deleting a rule is safe: every booking keeps the price it was made with."""
+
+    serializer_class = PriceRuleSerializer
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return PriceRule.objects.none()
+        qs = PriceRule.objects.filter(club__in=clubs_of(self.request.user)).select_related(
+            "club", "court"
+        )
+        if self.action == "list":
+            club = self.request.query_params.get("club")
+            if club:
+                if not club.isdigit():
+                    raise ValidationError({"club": "Must be a club id."})
+                qs = qs.filter(club_id=int(club))
+        return qs.order_by("club_id", "court_id", "start_hour", "id")
+
+    @extend_schema(parameters=[OpenApiParameter("club", int)])
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+
+class ClubViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Your clubs, with your role in each. Owners and managers can edit hours and timezone."""
+
+    serializer_class = ClubSerializer
+    permission_classes = [IsAuthenticated, IsClubManagerOrReadOnly]
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return Club.objects.none()
+        user = self.request.user
+        role = Membership.objects.filter(club=OuterRef("pk"), user=user).values("role")[:1]
+        return clubs_of(user).annotate(role=Subquery(role)).order_by("name")
 
 
 class BookingViewSet(
@@ -144,3 +237,80 @@ class BookingViewSet(
         booking = self.get_object()
         cancel_booking(booking)
         return Response(BookingSerializer(booking).data)
+
+
+class RevenueReportView(APIView):
+    """Confirmed bookings only, grouped by court and by day in the club's timezone."""
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("club", int, required=True),
+            OpenApiParameter("from", str, required=True, description="YYYY-MM-DD, inclusive"),
+            OpenApiParameter("to", str, required=True, description="YYYY-MM-DD, inclusive"),
+        ],
+        responses=RevenueReportSerializer,
+    )
+    def get(self, request):
+        params = request.query_params
+        missing = {k: "This parameter is required." for k in ("club", "from", "to") if not params.get(k)}
+        if missing:
+            raise ValidationError(missing)
+        if not params["club"].isdigit():
+            raise ValidationError({"club": "Must be a club id."})
+
+        club = get_object_or_404(clubs_of(request.user), pk=int(params["club"]))
+        if not can_manage(request.user, club):
+            raise PermissionDenied(MANAGERS_ONLY)
+
+        date_from = parse_date(params["from"], "from")
+        date_to = parse_date(params["to"], "to")
+        if date_to < date_from:
+            raise ValidationError({"to": "Must not be before 'from'."})
+        if (date_to - date_from).days >= MAX_REPORT_DAYS:
+            raise ValidationError({"to": f"The range cannot exceed {MAX_REPORT_DAYS} days."})
+
+        tz = ZoneInfo(club.timezone)
+        bookings = Booking.objects.filter(
+            court__club=club,
+            status=Booking.Status.CONFIRMED,
+            start_at__gte=datetime.combine(date_from, time(0), tzinfo=tz),
+            start_at__lt=datetime.combine(date_to + timedelta(days=1), time(0), tzinfo=tz),
+        )
+        zero = Decimal("0.00")
+
+        totals = bookings.aggregate(total=Sum("price"), count=Count("id"))
+        by_court = (
+            bookings.values("court_id", "court__name")
+            .annotate(total=Sum("price"), count=Count("id"))
+            .order_by("court__name")
+        )
+        by_day = (
+            bookings.annotate(day=TruncDate("start_at", tzinfo=tz))
+            .values("day")
+            .annotate(total=Sum("price"), count=Count("id"))
+            .order_by("day")
+        )
+
+        report = {
+            "club": club.pk,
+            "currency": club.currency,
+            "timezone": club.timezone,
+            "date_from": date_from,
+            "date_to": date_to,
+            "total": totals["total"] or zero,
+            "bookings": totals["count"],
+            "by_court": [
+                {
+                    "court": row["court_id"],
+                    "court_name": row["court__name"],
+                    "total": row["total"],
+                    "bookings": row["count"],
+                }
+                for row in by_court
+            ],
+            "by_day": [
+                {"date": row["day"], "total": row["total"], "bookings": row["count"]}
+                for row in by_day
+            ],
+        }
+        return Response(RevenueReportSerializer(report).data)
