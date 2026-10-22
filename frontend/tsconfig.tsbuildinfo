@@ -1,1 +1,0 @@
-{"root":["./src/app.tsx","./src/api.ts","./src/format.ts","./src/main.tsx","./src/session.tsx","./src/components/brand.tsx","./src/components/modal.tsx","./src/pages/courts.tsx","./src/pages/login.tsx","./src/pages/prices.tsx","./src/pages/revenue.tsx","./src/pages/schedule.tsx","./src/pages/settings.tsx","./vite.config.ts"],"version":"5.8.3"}

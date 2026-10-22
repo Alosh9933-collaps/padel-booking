@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -6,28 +7,40 @@ from django.db import IntegrityError, connection, transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from clubs.models import PriceRule
+from clubs.models import Customer, PriceRule, normalize_phone
 
 from .models import Booking
 
 # First key of the two-key Postgres advisory lock taken per court while booking.
 COURT_LOCK_NAMESPACE = 7201
+MAX_WEEKS = 52
 
 
 class BookingError(Exception):
-    """Base class for expected, user-facing booking problems."""
+    """Base class for expected, user-facing booking problems.
+
+    `code` is stable and machine-readable, so the frontend can show the
+    message in the user's language; the text itself is English.
+    """
+
+    code = "booking_error"
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        if code:
+            self.code = code
 
 
 class InvalidBookingTime(BookingError):
-    pass
+    code = "invalid_time"
 
 
 class SlotUnavailable(BookingError):
-    pass
+    code = "slot_unavailable"
 
 
 class PriceNotConfigured(BookingError):
-    pass
+    code = "price_not_configured"
 
 
 def _club_window(club, local_start):
@@ -45,11 +58,11 @@ def _club_window(club, local_start):
 def validate_window(court, start_at, end_at):
     club = court.club
     if timezone.is_naive(start_at) or timezone.is_naive(end_at):
-        raise InvalidBookingTime("Start and end must be timezone-aware datetimes.")
+        raise InvalidBookingTime("Start and end must be timezone-aware datetimes.", "naive_time")
     if end_at <= start_at:
-        raise InvalidBookingTime("End must be after start.")
+        raise InvalidBookingTime("End must be after start.", "end_before_start")
     if not court.is_active:
-        raise InvalidBookingTime("This court is not active.")
+        raise InvalidBookingTime("This court is not active.", "court_inactive")
 
     tz = ZoneInfo(club.timezone)
     local_start = start_at.astimezone(tz)
@@ -58,11 +71,11 @@ def validate_window(court, start_at, end_at):
     # Any minute is allowed; the club's slot_minutes only shapes the schedule view.
     for moment in (local_start, local_end):
         if moment.second or moment.microsecond:
-            raise InvalidBookingTime("Times must be whole minutes.")
+            raise InvalidBookingTime("Times must be whole minutes.", "whole_minutes")
 
     open_dt, close_dt = _club_window(club, local_start)
     if local_start < open_dt or local_end > close_dt:
-        raise InvalidBookingTime("The booking is outside the club's opening hours.")
+        raise InvalidBookingTime("The booking is outside the club's opening hours.", "outside_hours")
 
 
 def _pick_rule(rules, court, local_moment):
@@ -103,17 +116,33 @@ def calculate_price(court, start_at, end_at):
     return total.quantize(Decimal("0.01"))
 
 
+def resolve_customer(club, name, phone):
+    """The club's customer with this phone, created on first visit. None without a phone."""
+    phone = normalize_phone(phone)
+    if not phone:
+        return None
+    customer, created = Customer.objects.get_or_create(
+        club=club, phone=phone, defaults={"name": name}
+    )
+    if not created and not customer.name:
+        customer.name = name
+        customer.save(update_fields=["name"])
+    return customer
+
+
+def _lock_court(court_id):
+    # Parallel inserts checking the same exclusion constraint can deadlock.
+    # Queueing writes per court avoids that; the constraint still decides.
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(%s, %s)", [COURT_LOCK_NAMESPACE, court_id])
+
+
 def _insert_booking(court, **fields):
     try:
         # The inner atomic() makes this a savepoint, so a rejected insert never
         # poisons an outer transaction (for example the one a request runs in).
         with transaction.atomic():
-            # Parallel inserts checking the same exclusion constraint can deadlock.
-            # Queueing bookings per court avoids that; the constraint still decides.
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT pg_advisory_xact_lock(%s, %s)", [COURT_LOCK_NAMESPACE, court.pk]
-                )
+            _lock_court(court.pk)
             return Booking.objects.create(court=court, **fields)
     except IntegrityError as exc:
         if "booking_no_overlap" in str(exc):
@@ -121,16 +150,28 @@ def _insert_booking(court, **fields):
         raise
 
 
-def create_booking(*, court, start_at, end_at, customer_name, customer_phone="", created_by=None):
+def create_booking(
+    *,
+    court,
+    start_at,
+    end_at,
+    customer_name,
+    customer_phone="",
+    created_by=None,
+    customer=None,
+    series=None,
+):
     validate_window(court, start_at, end_at)
     return _insert_booking(
         court,
         start_at=start_at,
         end_at=end_at,
+        customer=customer or resolve_customer(court.club, customer_name, customer_phone),
         customer_name=customer_name,
         customer_phone=customer_phone,
         price=calculate_price(court, start_at, end_at),
         created_by=created_by,
+        series=series,
     )
 
 
@@ -141,17 +182,22 @@ def change_booking(booking, *, start_at=None, end_at=None, customer_name=None, c
     constraint still guards the update, so extending into another booking fails.
     """
     if booking.status != Booking.Status.CONFIRMED:
-        raise BookingError("A cancelled booking cannot be changed.")
+        raise BookingError("Only a confirmed booking can be changed.", "booking_closed")
     if booking.is_open and (start_at or end_at):
-        raise BookingError("Open play has no end time yet. Stop it first, then change it.")
+        raise BookingError(
+            "Open play has no end time yet. Stop it first, then change it.", "open_play_running"
+        )
 
     fields = []
     if customer_name is not None:
         booking.customer_name = customer_name
         fields.append("customer_name")
-    if customer_phone is not None:
+    if customer_phone is not None and customer_phone != booking.customer_phone:
         booking.customer_phone = customer_phone
-        fields.append("customer_phone")
+        booking.customer = resolve_customer(
+            booking.court.club, booking.customer_name, customer_phone
+        )
+        fields += ["customer_phone", "customer"]
 
     new_start = start_at or booking.start_at
     new_end = end_at or booking.end_at
@@ -165,15 +211,14 @@ def change_booking(booking, *, start_at=None, end_at=None, customer_name=None, c
         return booking
     try:
         with transaction.atomic():
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT pg_advisory_xact_lock(%s, %s)", [COURT_LOCK_NAMESPACE, booking.court_id]
-                )
+            _lock_court(booking.court_id)
             booking.save(update_fields=fields)
     except IntegrityError as exc:
         if "booking_no_overlap" in str(exc):
             booking.refresh_from_db()
-            raise SlotUnavailable("The new time overlaps another booking on this court.") from exc
+            raise SlotUnavailable(
+                "The new time overlaps another booking on this court.", "overlap_on_change"
+            ) from exc
         raise
     return booking
 
@@ -193,7 +238,9 @@ def start_open_session(*, court, customer_name, customer_phone="", created_by=No
     tz = ZoneInfo(court.club.timezone)
     _, close_dt = _club_window(court.club, start_at.astimezone(tz))
     if close_dt - start_at < timedelta(minutes=1):
-        raise InvalidBookingTime("The club is closing; there is no time left for open play.")
+        raise InvalidBookingTime(
+            "The club is closing; there is no time left for open play.", "club_closing"
+        )
     validate_window(court, start_at, close_dt)
     # Fail now rather than at stop time if part of the session has no price.
     calculate_price(court, start_at, close_dt)
@@ -203,6 +250,7 @@ def start_open_session(*, court, customer_name, customer_phone="", created_by=No
             start_at=start_at,
             end_at=close_dt,
             is_open=True,
+            customer=resolve_customer(court.club, customer_name, customer_phone),
             customer_name=customer_name,
             customer_phone=customer_phone,
             price=Decimal("0"),
@@ -211,14 +259,15 @@ def start_open_session(*, court, customer_name, customer_phone="", created_by=No
     except SlotUnavailable as exc:
         raise SlotUnavailable(
             "This court is already booked later today, so open play cannot start. "
-            "Open play holds the court until closing time."
+            "Open play holds the court until closing time.",
+            "open_play_conflict",
         ) from exc
 
 
 def stop_open_session(booking):
     """End open play now and charge the exact minutes played."""
     if not booking.is_open or booking.status != Booking.Status.CONFIRMED:
-        raise BookingError("This booking is not a running open session.")
+        raise BookingError("This booking is not a running open session.", "not_open_play")
     # Never shorter than one minute, never past the hold (closing time).
     end_at = min(max(_this_minute(), booking.start_at + timedelta(minutes=1)), booking.end_at)
     booking.end_at = end_at
@@ -235,3 +284,82 @@ def cancel_booking(booking):
     booking.cancelled_at = timezone.now()
     booking.save(update_fields=["status", "cancelled_at"])
     return booking
+
+
+def mark_no_show(booking):
+    """The customer never came. The booking stays on record but frees the court."""
+    if booking.status != Booking.Status.CONFIRMED or booking.is_open:
+        raise BookingError("Only a confirmed, finished-time booking can be a no-show.", "booking_closed")
+    if booking.start_at > timezone.now():
+        raise BookingError("A booking can be marked as a no-show only after it starts.", "no_show_too_early")
+    booking.status = Booking.Status.NO_SHOW
+    booking.save(update_fields=["status"])
+    return booking
+
+
+def _weekly_times(court, start_at, end_at, weeks):
+    """The same local wall-clock time, week after week (safe across DST changes)."""
+    tz = ZoneInfo(court.club.timezone)
+    local_start = start_at.astimezone(tz)
+    length = end_at - start_at
+    for week in range(weeks):
+        day = local_start.date() + timedelta(weeks=week)
+        start = datetime.combine(day, local_start.time(), tzinfo=tz)
+        yield start, start + length
+
+
+def plan_weekly(*, court, start_at, end_at, weeks):
+    """Which weeks of a series can be booked, without booking anything."""
+    if not 1 <= weeks <= MAX_WEEKS:
+        raise BookingError(f"Choose between 1 and {MAX_WEEKS} weeks.", "weeks_out_of_range")
+    plan = []
+    for start, end in _weekly_times(court, start_at, end_at, weeks):
+        entry = {"start_at": start, "end_at": end, "price": None, "ok": True, "code": None, "detail": None}
+        try:
+            validate_window(court, start, end)
+            entry["price"] = calculate_price(court, start, end)
+            taken = Booking.objects.filter(
+                court=court, status=Booking.Status.CONFIRMED, start_at__lt=end, end_at__gt=start
+            ).exists()
+            if taken:
+                raise SlotUnavailable("This time slot is already booked.")
+        except BookingError as exc:
+            entry.update(ok=False, code=exc.code, detail=str(exc))
+        plan.append(entry)
+    return plan
+
+
+def create_weekly(*, court, start_at, end_at, weeks, customer_name, customer_phone="", created_by=None):
+    """Book the same time every week. Weeks that cannot be booked are skipped, not fatal."""
+    if not 1 <= weeks <= MAX_WEEKS:
+        raise BookingError(f"Choose between 1 and {MAX_WEEKS} weeks.", "weeks_out_of_range")
+    series = uuid.uuid4()
+    customer = resolve_customer(court.club, customer_name, customer_phone)
+    created, skipped = [], []
+    for start, end in _weekly_times(court, start_at, end_at, weeks):
+        try:
+            created.append(
+                create_booking(
+                    court=court,
+                    start_at=start,
+                    end_at=end,
+                    customer_name=customer_name,
+                    customer_phone=customer_phone,
+                    created_by=created_by,
+                    customer=customer,
+                    series=series,
+                )
+            )
+        except BookingError as exc:
+            skipped.append({"start_at": start, "end_at": end, "code": exc.code, "detail": str(exc)})
+    return created, skipped
+
+
+def cancel_following(booking):
+    """Cancel this booking and every later confirmed booking of its weekly series."""
+    if booking.series is None:
+        return [cancel_booking(booking)]
+    later = Booking.objects.filter(
+        series=booking.series, status=Booking.Status.CONFIRMED, start_at__gte=booking.start_at
+    )
+    return [cancel_booking(b) for b in later]

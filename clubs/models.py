@@ -131,5 +131,38 @@ class PriceRule(models.Model):
  
     def __str__(self):
         return f"{self.club}: {self.start_hour}-{self.end_hour} @ {self.price_per_hour}"
- 
+
+
+def normalize_phone(raw):
+    """Digits only, keeping a leading +, so "+7 (900) 000-00-00" matches "+79000000000"."""
+    raw = (raw or "").strip()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    return f"+{digits}" if raw.startswith("+") and digits else digits
+
+
+class Customer(models.Model):
+    """A player of one club, recognised by phone number."""
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="customers")
+    name = models.CharField(max_length=120)
+    phone = models.CharField(max_length=32, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["club", "phone"],
+                condition=~Q(phone=""),
+                name="uniq_customer_phone_per_club",
+            ),
+        ]
+        indexes = [models.Index(fields=["club", "name"], name="customer_club_name_idx")]
+
+    def save(self, *args, **kwargs):
+        self.phone = normalize_phone(self.phone)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.name} ({self.phone})" if self.phone else self.name
 

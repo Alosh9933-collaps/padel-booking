@@ -14,11 +14,16 @@ class Booking(models.Model):
     class Status(models.TextChoices):
         CONFIRMED = "confirmed", "Confirmed"
         CANCELLED = "cancelled", "Cancelled"
+        NO_SHOW = "no_show", "No-show"
 
     court = models.ForeignKey("clubs.Court", on_delete=models.PROTECT, related_name="bookings")
     # Always stored as timezone-aware datetimes (UTC in the database).
     start_at = models.DateTimeField()
     end_at = models.DateTimeField()
+    customer = models.ForeignKey(
+        "clubs.Customer", null=True, blank=True, on_delete=models.SET_NULL, related_name="bookings"
+    )
+    # Name and phone as given at booking time; the Customer record may change later.
     customer_name = models.CharField(max_length=120)
     customer_phone = models.CharField(max_length=32, blank=True)
     # Price is frozen at booking time so later price changes never rewrite history.
@@ -27,6 +32,8 @@ class Booking(models.Model):
     # Open play: started without an end time. While open, end_at holds the court
     # until closing time and price stays 0; stopping sets the real end and price.
     is_open = models.BooleanField(default=False)
+    # Bookings made together as a weekly series share this id.
+    series = models.UUIDField(null=True, blank=True, db_index=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
@@ -54,3 +61,30 @@ class Booking(models.Model):
 
     def __str__(self):
         return f"{self.court} {self.start_at:%Y-%m-%d %H:%M} ({self.status})"
+
+
+class Payment(models.Model):
+    """Money received for a booking. Players often split, so a booking can have several."""
+
+    class Method(models.TextChoices):
+        CASH = "cash", "Cash"
+        CARD = "card", "Card"
+        TRANSFER = "transfer", "Transfer"
+
+    booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name="payments")
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    method = models.CharField(max_length=10, choices=Method.choices, default=Method.CASH)
+    payer_name = models.CharField(max_length=120, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(amount__gt=0), name="payment_amount_positive"),
+        ]
+
+    def __str__(self):
+        return f"{self.amount} {self.method} for booking {self.booking_id}"
+
