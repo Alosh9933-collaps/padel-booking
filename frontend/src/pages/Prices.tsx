@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 
-import { Api, messageOf, type Court, type PriceRule, type PriceRuleInput } from "../api";
+import { Api, type Court, type PriceRule, type PriceRuleInput } from "../api";
 import { Modal } from "../components/Modal";
-import { WEEKDAYS, hourLabel, money } from "../format";
+import { hourLabel, money, weekdayNames } from "../format";
+import { errorText, useT } from "../i18n";
 import { useClub, useToast } from "../session";
 
 // Sequential ramp (one hue, light to dark) for the weekly price map.
@@ -14,11 +15,7 @@ function pickRule(rules: PriceRule[], courtId: number | null, day: number, hour:
   for (const r of rules) {
     if (r.court !== null && r.court !== courtId) continue;
     if (!r.days_of_week.includes(day) || hour < r.start_hour || hour >= r.end_hour) continue;
-    if (
-      !best ||
-      r.priority > best.priority ||
-      (r.priority === best.priority && r.court !== null && best.court === null)
-    ) {
+    if (!best || r.priority > best.priority || (r.priority === best.priority && r.court !== null && best.court === null)) {
       best = r;
     }
   }
@@ -26,12 +23,14 @@ function pickRule(rules: PriceRule[], courtId: number | null, day: number, hour:
 }
 
 export default function Prices() {
+  const t = useT();
   const { club, canManage } = useClub();
   const [rules, setRules] = useState<PriceRule[] | null>(null);
   const [courts, setCourts] = useState<Court[]>([]);
   const [viewCourt, setViewCourt] = useState<number | null>(null);
   const [editing, setEditing] = useState<PriceRule | "new" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const days = weekdayNames();
 
   const load = () =>
     Promise.all([Api.priceRules(club.id), Api.courts()])
@@ -42,7 +41,7 @@ export default function Prices() {
         // Show a real court by default: it includes both club-wide and court-specific rules.
         setViewCourt((current) => current ?? own[0]?.id ?? null);
       })
-      .catch((e) => setError(messageOf(e)));
+      .catch((e) => setError(errorText(e, t)));
 
   useEffect(() => {
     load();
@@ -50,41 +49,37 @@ export default function Prices() {
   }, [club.id]);
 
   const courtName = (id: number | null) =>
-    id === null ? "All courts" : courts.find((c) => c.id === id)?.name ?? `Court #${id}`;
+    id === null ? t("prices.allCourts") : courts.find((c) => c.id === id)?.name ?? `#${id}`;
 
   return (
     <div className="page">
       <header className="page-head">
         <div>
-          <p className="eyebrow">Prices</p>
-          <h1>Price per hour</h1>
+          <p className="eyebrow">{t("nav.prices")}</p>
+          <h1>{t("prices.title")}</h1>
         </div>
         {canManage && (
           <button className="btn btn-primary" onClick={() => setEditing("new")}>
-            + Add price rule
+            + {t("prices.add")}
           </button>
         )}
       </header>
-      {!canManage && (
-        <p className="note">You can view prices. Only the owner or a manager can change them.</p>
-      )}
+      {!canManage && <p className="note">{t("prices.readOnly")}</p>}
       {error && <div className="alert">{error}</div>}
 
       {rules && (
         <section className="card">
           <div className="card-head">
             <div>
-              <h2>Week at a glance</h2>
-              <p className="muted">
-                The price a customer pays for each hour. Empty cells have no rule, so they cannot be booked.
-              </p>
+              <h2>{t("prices.week")}</h2>
+              <p className="muted">{t("prices.weekHint")}</p>
             </div>
             <select
               value={viewCourt ?? ""}
               onChange={(e) => setViewCourt(e.target.value ? Number(e.target.value) : null)}
-              aria-label="Show prices for court"
+              aria-label={t("prices.showFor")}
             >
-              <option value="">Club-wide rules only</option>
+              <option value="">{t("prices.clubWideOnly")}</option>
               {courts.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
@@ -99,20 +94,20 @@ export default function Prices() {
       {rules && (
         <section className="card">
           <div className="card-head">
-            <h2>Rules</h2>
+            <h2>{t("prices.rules")}</h2>
           </div>
           {rules.length === 0 ? (
-            <p className="muted">No price rules yet. Without a rule, no slot can be booked.</p>
+            <p className="muted">{t("prices.empty")}</p>
           ) : (
             <div className="table-wrap">
               <table className="table">
                 <thead>
                   <tr>
-                    <th>Days</th>
-                    <th>Hours</th>
-                    <th>Court</th>
-                    <th className="num">Per hour</th>
-                    <th className="num">Priority</th>
+                    <th>{t("prices.days")}</th>
+                    <th>{t("prices.hours")}</th>
+                    <th>{t("prices.court")}</th>
+                    <th className="num">{t("prices.perHour")}</th>
+                    <th className="num">{t("prices.priority")}</th>
                     {canManage && <th />}
                   </tr>
                 </thead>
@@ -121,14 +116,14 @@ export default function Prices() {
                     <tr key={r.id}>
                       <td>
                         <div className="day-chips">
-                          {WEEKDAYS.map((d, i) => (
+                          {days.map((d, i) => (
                             <span key={d} className={r.days_of_week.includes(i) ? "on" : ""}>
-                              {d.slice(0, 2)}
+                              {d}
                             </span>
                           ))}
                         </div>
                       </td>
-                      <td>
+                      <td dir="ltr" className="phone">
                         {hourLabel(r.start_hour)}–{hourLabel(r.end_hour)}
                       </td>
                       <td>{courtName(r.court)}</td>
@@ -137,7 +132,7 @@ export default function Prices() {
                       {canManage && (
                         <td className="num">
                           <button className="btn btn-small" onClick={() => setEditing(r)}>
-                            Edit
+                            {t("common.edit")}
                           </button>
                         </td>
                       )}
@@ -166,14 +161,16 @@ export default function Prices() {
 }
 
 function PriceMap({ rules, courtId }: { rules: PriceRule[]; courtId: number | null }) {
+  const t = useT();
   const { club } = useClub();
+  const days = weekdayNames();
   const hours = useMemo(() => {
     const list = [];
     for (let h = club.opening_hour; h < club.closing_hour; h++) list.push(h);
     return list;
   }, [club.opening_hour, club.closing_hour]);
 
-  const grid = WEEKDAYS.map((_, day) => hours.map((h) => pickRule(rules, courtId, day, h)));
+  const grid = days.map((_, day) => hours.map((h) => pickRule(rules, courtId, day, h)));
   const prices = [
     ...new Set(grid.flat().filter((r): r is PriceRule => r !== null).map((r) => Number(r.price_per_hour))),
   ].sort((a, b) => a - b);
@@ -186,8 +183,8 @@ function PriceMap({ rules, courtId }: { rules: PriceRule[]; courtId: number | nu
 
   return (
     <>
-      <div className="table-wrap">
-        <div className="price-map" style={{ gridTemplateColumns: `44px repeat(${hours.length}, minmax(44px, 1fr))` }}>
+      <div className="table-wrap" dir="ltr">
+        <div className="price-map" style={{ gridTemplateColumns: `minmax(44px, auto) repeat(${hours.length}, minmax(44px, 1fr))` }}>
           <span />
           {hours.map((h) => (
             <span key={h} className="pm-hour">
@@ -196,9 +193,9 @@ function PriceMap({ rules, courtId }: { rules: PriceRule[]; courtId: number | nu
           ))}
           {grid.map((row, day) => (
             <div key={day} className="pm-row">
-              <span className="pm-day">{WEEKDAYS[day]}</span>
+              <span className="pm-day">{days[day]}</span>
               {row.map((rule, i) => {
-                if (!rule) return <span key={i} className="pm-cell pm-empty" title="No price" />;
+                if (!rule) return <span key={i} className="pm-cell pm-empty" title={t("prices.noPrice")} />;
                 const price = Number(rule.price_per_hour);
                 const index = RAMP.indexOf(colorOf(price));
                 return (
@@ -206,7 +203,7 @@ function PriceMap({ rules, courtId }: { rules: PriceRule[]; courtId: number | nu
                     key={i}
                     className="pm-cell"
                     style={{ background: colorOf(price), color: index >= 3 ? "#fff" : "var(--ink)" }}
-                    title={`${WEEKDAYS[day]} ${hourLabel(hours[i])}: ${money(price, club.currency)} per hour`}
+                    title={`${days[day]} ${hourLabel(hours[i])}: ${money(price, club.currency)}`}
                   >
                     {price >= 1000 ? `${+(price / 1000).toFixed(1)}k` : price}
                   </span>
@@ -220,11 +217,11 @@ function PriceMap({ rules, courtId }: { rules: PriceRule[]; courtId: number | nu
         <div className="legend">
           {prices.map((p) => (
             <span key={p}>
-              <i className="sw" style={{ background: colorOf(p) }} /> {money(p, club.currency)}/h
+              <i className="sw" style={{ background: colorOf(p) }} /> {money(p, club.currency)} / {t("prices.hourShort")}
             </span>
           ))}
           <span>
-            <i className="sw sw-closed" /> No price
+            <i className="sw sw-closed" /> {t("prices.noPrice")}
           </span>
         </div>
       )}
@@ -233,9 +230,9 @@ function PriceMap({ rules, courtId }: { rules: PriceRule[]; courtId: number | nu
 }
 
 const PRESETS: [string, number[]][] = [
-  ["Weekdays", [0, 1, 2, 3, 4]],
-  ["Weekend", [5, 6]],
-  ["Every day", [0, 1, 2, 3, 4, 5, 6]],
+  ["prices.weekdays", [0, 1, 2, 3, 4]],
+  ["prices.weekend", [5, 6]],
+  ["prices.everyDay", [0, 1, 2, 3, 4, 5, 6]],
 ];
 
 function RuleModal({
@@ -249,9 +246,11 @@ function RuleModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const t = useT();
   const { club } = useClub();
   const notify = useToast();
-  const [days, setDays] = useState<number[]>(rule?.days_of_week ?? [0, 1, 2, 3, 4]);
+  const days = weekdayNames();
+  const [selected, setSelected] = useState<number[]>(rule?.days_of_week ?? [0, 1, 2, 3, 4]);
   const [start, setStart] = useState(rule?.start_hour ?? club.opening_hour);
   const [end, setEnd] = useState(rule?.end_hour ?? club.closing_hour);
   const [court, setCourt] = useState<number | null>(rule?.court ?? null);
@@ -262,12 +261,12 @@ function RuleModal({
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const toggleDay = (d: number) =>
-    setDays((list) => (list.includes(d) ? list.filter((x) => x !== d) : [...list, d].sort()));
+    setSelected((list) => (list.includes(d) ? list.filter((x) => x !== d) : [...list, d].sort()));
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (days.length === 0) {
-      setError("Pick at least one day.");
+    if (selected.length === 0) {
+      setError(t("prices.pickDay"));
       return;
     }
     setBusy(true);
@@ -275,7 +274,7 @@ function RuleModal({
     const body: PriceRuleInput = {
       club: club.id,
       court,
-      days_of_week: days,
+      days_of_week: selected,
       start_hour: start,
       end_hour: end,
       price_per_hour: price,
@@ -284,10 +283,10 @@ function RuleModal({
     try {
       if (rule) await Api.updatePriceRule(rule.id, body);
       else await Api.createPriceRule(body);
-      notify("Price rule saved");
+      notify(t("common.saved"));
       onSaved();
     } catch (err) {
-      setError(messageOf(err));
+      setError(errorText(err, t));
       setBusy(false);
     }
   };
@@ -297,10 +296,10 @@ function RuleModal({
     setBusy(true);
     try {
       await Api.deletePriceRule(rule.id);
-      notify("Price rule deleted. Existing bookings keep their price.");
+      notify(t("prices.deleted"));
       onSaved();
     } catch (err) {
-      setError(messageOf(err));
+      setError(errorText(err, t));
       setBusy(false);
     }
   };
@@ -309,33 +308,33 @@ function RuleModal({
 
   return (
     <Modal
-      title={rule ? "Edit price rule" : "New price rule"}
-      subtitle="Bookings already made keep the price they were made with."
+      title={rule ? t("prices.editRule") : t("prices.newRule")}
+      subtitle={t("prices.keepHint")}
       onClose={onClose}
       footer={
         confirmDelete ? (
           <>
-            <span className="muted grow">Delete this rule?</span>
+            <span className="muted grow">{t("prices.confirmDelete")}</span>
             <button className="btn" onClick={() => setConfirmDelete(false)} disabled={busy}>
-              Keep it
+              {t("common.keep")}
             </button>
             <button className="btn btn-danger" onClick={remove} disabled={busy}>
-              Yes, delete
+              {t("common.delete")}
             </button>
           </>
         ) : (
           <>
             {rule && (
               <button type="button" className="btn btn-danger-ghost" onClick={() => setConfirmDelete(true)}>
-                Delete
+                {t("common.delete")}
               </button>
             )}
             <span className="grow" />
             <button type="button" className="btn" onClick={onClose}>
-              Close
+              {t("common.close")}
             </button>
             <button className="btn btn-primary" form="rule-form" disabled={busy}>
-              {busy ? "Saving…" : "Save"}
+              {busy ? t("common.saving") : t("common.save")}
             </button>
           </>
         )
@@ -343,15 +342,15 @@ function RuleModal({
     >
       <form id="rule-form" className="form" onSubmit={submit}>
         <div className="field">
-          <span>Days</span>
+          <span>{t("prices.days")}</span>
           <div className="day-picker">
-            {WEEKDAYS.map((d, i) => (
+            {days.map((d, i) => (
               <button
                 type="button"
                 key={d}
-                className={days.includes(i) ? "on" : ""}
+                className={selected.includes(i) ? "on" : ""}
                 onClick={() => toggleDay(i)}
-                aria-pressed={days.includes(i)}
+                aria-pressed={selected.includes(i)}
               >
                 {d}
               </button>
@@ -359,15 +358,15 @@ function RuleModal({
           </div>
           <div className="presets">
             {PRESETS.map(([label, value]) => (
-              <button type="button" key={label} className="link-btn" onClick={() => setDays(value)}>
-                {label}
+              <button type="button" key={label} className="link-btn" onClick={() => setSelected(value)}>
+                {t(label)}
               </button>
             ))}
           </div>
         </div>
         <div className="field-row">
           <label className="field">
-            <span>From</span>
+            <span>{t("booking.from")}</span>
             <select value={start} onChange={(e) => setStart(Number(e.target.value))}>
               {hours.slice(0, 24).map((h) => (
                 <option key={h} value={h}>
@@ -377,11 +376,11 @@ function RuleModal({
             </select>
           </label>
           <label className="field">
-            <span>Until</span>
+            <span>{t("booking.until")}</span>
             <select value={end} onChange={(e) => setEnd(Number(e.target.value))}>
               {hours.slice(1).map((h) => (
                 <option key={h} value={h}>
-                  {h === 24 ? "24:00 (midnight)" : hourLabel(h)}
+                  {h === 24 ? t("settings.midnight") : hourLabel(h)}
                 </option>
               ))}
             </select>
@@ -389,25 +388,18 @@ function RuleModal({
         </div>
         <div className="field-row">
           <label className="field">
-            <span>Price per hour ({club.currency})</span>
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              required
-            />
+            <span>{t("prices.pricePerHour", { currency: club.currency })}</span>
+            <input type="number" min={0} step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} required />
           </label>
           <label className="field">
-            <span>Priority</span>
+            <span>{t("prices.priority")}</span>
             <input type="number" value={priority} onChange={(e) => setPriority(Number(e.target.value))} />
           </label>
         </div>
         <label className="field">
-          <span>Applies to</span>
+          <span>{t("prices.appliesTo")}</span>
           <select value={court ?? ""} onChange={(e) => setCourt(e.target.value ? Number(e.target.value) : null)}>
-            <option value="">All courts</option>
+            <option value="">{t("prices.allCourts")}</option>
             {courts.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
@@ -415,7 +407,7 @@ function RuleModal({
             ))}
           </select>
         </label>
-        <p className="hint">When rules overlap, the higher priority wins. On a tie, a court-specific rule wins.</p>
+        <p className="hint">{t("prices.priorityHint")}</p>
         {error && <div className="alert">{error}</div>}
       </form>
     </Modal>

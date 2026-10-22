@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count, F, Max, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -90,17 +91,18 @@ class CustomerViewSet(
                     match |= Q(phone__contains=digits)
                 qs = qs.filter(match)
 
-        done = Booking.objects.filter(customer=OuterRef("pk"), status=Booking.Status.CONFIRMED, is_open=False)
+        # A visit is a confirmed booking that has started; "spent" is money actually received.
+        visited = Q(bookings__status=Booking.Status.CONFIRMED, bookings__start_at__lte=timezone.now())
         spent = (
-            with_totals(done)
-            .values("customer")
-            .annotate(s=Sum(F("price") + F("items_total")))
+            Payment.objects.filter(booking__customer=OuterRef("pk"))
+            .values("booking__customer")
+            .annotate(s=Sum("amount"))
             .values("s")
         )
         return qs.annotate(
-            visits=Count("bookings", filter=Q(bookings__status=Booking.Status.CONFIRMED), distinct=True),
+            visits=Count("bookings", filter=visited, distinct=True),
             no_shows=Count("bookings", filter=Q(bookings__status=Booking.Status.NO_SHOW), distinct=True),
-            last_visit=Max("bookings__start_at", filter=Q(bookings__status=Booking.Status.CONFIRMED)),
+            last_visit=Max("bookings__start_at", filter=visited),
             spent=Coalesce(Subquery(spent, output_field=MONEY), Value(ZERO, output_field=MONEY)),
         ).order_by("name")
 

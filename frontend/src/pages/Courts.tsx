@@ -1,11 +1,13 @@
 import { useEffect, useState, type FormEvent } from "react";
 
-import { Api, messageOf, type Court } from "../api";
+import { Api, type Court } from "../api";
 import { CourtArt } from "../components/Brand";
 import { Modal } from "../components/Modal";
+import { errorText, useT } from "../i18n";
 import { useClub, useToast } from "../session";
 
 export default function Courts() {
+  const t = useT();
   const { club, canManage } = useClub();
   const [courts, setCourts] = useState<Court[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -14,7 +16,7 @@ export default function Courts() {
   const load = () =>
     Api.courts()
       .then((list) => setCourts(list.filter((c) => c.club === club.id)))
-      .catch((e) => setError(messageOf(e)));
+      .catch((e) => setError(errorText(e, t)));
 
   useEffect(() => {
     load();
@@ -25,19 +27,17 @@ export default function Courts() {
     <div className="page">
       <header className="page-head">
         <div>
-          <p className="eyebrow">Courts</p>
+          <p className="eyebrow">{t("nav.courts")}</p>
           <h1>{club.name}</h1>
         </div>
         {canManage && (
           <button className="btn btn-primary" onClick={() => setEditing("new")}>
-            + Add court
+            + {t("courts.add")}
           </button>
         )}
       </header>
 
-      {!canManage && (
-        <p className="note">You can view courts. Only the owner or a manager can add or change them.</p>
-      )}
+      {!canManage && <p className="note">{t("courts.readOnly")}</p>}
       {error && <div className="alert">{error}</div>}
 
       <div className="court-grid">
@@ -52,15 +52,15 @@ export default function Courts() {
               <div>
                 <h3>{court.name}</h3>
                 <div className="tags">
-                  <span className="tag">{court.kind === "indoor" ? "Indoor" : "Outdoor"}</span>
+                  <span className="tag">{t(`courts.${court.kind}`)}</span>
                   <span className={`tag ${court.is_active ? "tag-ok" : "tag-off"}`}>
-                    {court.is_active ? "Active" : "Inactive"}
+                    {court.is_active ? t("courts.active") : t("courts.inactive")}
                   </span>
                 </div>
               </div>
               {canManage && (
                 <button className="btn btn-small" onClick={() => setEditing(court)}>
-                  Edit
+                  {t("common.edit")}
                 </button>
               )}
             </div>
@@ -68,8 +68,8 @@ export default function Courts() {
         ))}
         {courts?.length === 0 && (
           <div className="card empty">
-            <h3>No courts yet</h3>
-            <p className="muted">Add your first court to open it for bookings.</p>
+            <h3>{t("courts.empty")}</h3>
+            <p className="muted">{t("courts.emptyHint")}</p>
           </div>
         )}
       </div>
@@ -88,15 +88,8 @@ export default function Courts() {
   );
 }
 
-function CourtModal({
-  court,
-  onClose,
-  onSaved,
-}: {
-  court: Court | null;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
+function CourtModal({ court, onClose, onSaved }: { court: Court | null; onClose: () => void; onSaved: () => void }) {
+  const t = useT();
   const { club } = useClub();
   const notify = useToast();
   const [name, setName] = useState(court?.name ?? "");
@@ -113,40 +106,40 @@ function CourtModal({
     try {
       if (court) await Api.updateCourt(court.id, body);
       else await Api.createCourt(body);
-      notify(court ? "Court saved" : `${body.name} added`);
+      notify(t("common.saved"));
       onSaved();
     } catch (err) {
-      setError(messageOf(err));
+      setError(errorText(err, t));
       setBusy(false);
     }
   };
 
   return (
     <Modal
-      title={court ? `Edit ${court.name}` : "Add a court"}
+      title={court ? t("courts.edit", { name: court.name }) : t("courts.add")}
       onClose={onClose}
       footer={
         <>
           <button type="button" className="btn" onClick={onClose}>
-            Close
+            {t("common.close")}
           </button>
           <button className="btn btn-primary" form="court-form" disabled={busy}>
-            {busy ? "Saving…" : "Save"}
+            {busy ? t("common.saving") : t("common.save")}
           </button>
         </>
       }
     >
       <form id="court-form" className="form" onSubmit={submit}>
         <label className="field">
-          <span>Name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={60} placeholder="Court 3" />
+          <span>{t("courts.name")}</span>
+          <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={60} placeholder={t("courts.namePlaceholder")} />
         </label>
         <div className="field">
-          <span>Type</span>
+          <span>{t("courts.type")}</span>
           <div className="segmented">
             {(["indoor", "outdoor"] as const).map((k) => (
               <button type="button" key={k} className={kind === k ? "on" : ""} onClick={() => setKind(k)}>
-                {k === "indoor" ? "Indoor" : "Outdoor"}
+                {t(`courts.${k}`)}
               </button>
             ))}
           </div>
@@ -155,10 +148,8 @@ function CourtModal({
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
           <span className="switch-track" aria-hidden />
           <span>
-            Open for bookings
-            <small className="muted">
-              Courts are never deleted, because past bookings point at them. Switch this off instead.
-            </small>
+            {t("courts.openForBookings")}
+            <small className="muted">{t("courts.neverDeleted")}</small>
           </span>
         </label>
         {error && <div className="alert">{error}</div>}

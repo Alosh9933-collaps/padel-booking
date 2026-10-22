@@ -62,12 +62,24 @@ class CustomerTests(OperationsTestBase):
         self.assertEqual(customer.bookings.count(), 2)
 
     def test_search_and_history(self):
-        self.client.post(reverse("booking-list"), payload(self.court_a, "12:00", "13:00"), format="json")
-        response = self.client.get(reverse("customer-list"), {"search": "900 000"})
+        created = self.client.post(
+            reverse("booking-list"), payload(self.court_a, "12:00", "13:00"), format="json"
+        )
+        self.pay("1500", booking=Booking.objects.get(pk=created.data["id"]))
+        with mock.patch("django.utils.timezone.now", return_value=at(2, 12, 30)):
+            response = self.client.get(reverse("customer-list"), {"search": "900 000"})
         data = response.data["results"] if "results" in response.data else response.data
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["visits"], 1)
-        self.assertEqual(Decimal(data[0]["spent"]), Decimal("2000.00"))
+        # Spent is money received, not money billed.
+        self.assertEqual(Decimal(data[0]["spent"]), Decimal("1500.00"))
+
+    def test_future_bookings_are_not_visits(self):
+        self.client.post(reverse("booking-list"), payload(self.court_a, "12:00", "13:00"), format="json")
+        with mock.patch("django.utils.timezone.now", return_value=at(1, 12)):
+            data = self.client.get(reverse("customer-list")).data
+        data = data["results"] if "results" in data else data
+        self.assertEqual((data[0]["visits"], data[0]["last_visit"]), (0, None))
 
     def test_customers_of_other_clubs_are_invisible(self):
         Customer.objects.create(club=self.club_b, name="Other", phone="123456")

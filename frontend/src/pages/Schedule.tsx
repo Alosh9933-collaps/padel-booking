@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 
-import { Api, ApiError, messageOf, type Booking, type Court, type Slot } from "../api";
+import { Api, type Booking, type Court, type Slot, type WeeklyWeek } from "../api";
+import { BillModal, localIso } from "../components/Bill";
+import { CustomerFields } from "../components/CustomerField";
 import { Modal } from "../components/Modal";
-import { addDays, clockTime, duration, longDate, money, todayIn } from "../format";
+import { addDays, clockTime, dateIn, ltr, duration, longDate, money, shortDate, timeRange, todayIn } from "../format";
+import { errorText, useT } from "../i18n";
 import { useClub, useToast } from "../session";
 
 const ROW_HEIGHT = 34;
@@ -20,7 +23,6 @@ interface Timeline {
   start: number;
   end: number;
   slotMs: number;
-  offset: string; // UTC offset of the club on this day, e.g. "+03:00"
 }
 
 function timelineOf(rows: Slot[]): Timeline | null {
@@ -31,7 +33,6 @@ function timelineOf(rows: Slot[]): Timeline | null {
     start,
     end: Date.parse(rows[rows.length - 1].end),
     slotMs: Date.parse(rows[0].end) - start,
-    offset: rows[0].start.match(/([+-]\d\d:\d\d|Z)$/)?.[1] ?? "Z",
   };
 }
 
@@ -41,10 +42,22 @@ function y(t: Timeline, ms: number) {
 
 /** Where a booking ends on the board. Running open play ends "now". */
 function shownEnd(b: Booking, now: number) {
-  return b.is_open ? Math.min(Math.max(now, Date.parse(b.start_at) + MINUTE), Date.parse(b.end_at)) : Date.parse(b.end_at);
+  return b.is_open
+    ? Math.min(Math.max(now, Date.parse(b.start_at) + MINUTE), Date.parse(b.end_at))
+    : Date.parse(b.end_at);
+}
+
+export function useNow() {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+  return now;
 }
 
 export default function Schedule() {
+  const t = useT();
   const { club } = useClub();
   const [date, setDate] = useState(() => todayIn(club.timezone));
   const [data, setData] = useState<DayData | null>(null);
@@ -53,7 +66,7 @@ export default function Schedule() {
   const [version, setVersion] = useState(0);
   const [picked, setPicked] = useState<{ court: Court; start: number } | null>(null);
   const [openPlayCourt, setOpenPlayCourt] = useState<Court | null>(null);
-  const [opened, setOpened] = useState<Booking | null>(null);
+  const [opened, setOpened] = useState<number | null>(null);
   const now = useNow();
 
   useEffect(() => {
@@ -75,7 +88,7 @@ export default function Schedule() {
         });
         setError(null);
       } catch (e) {
-        if (!cancelled) setError(messageOf(e));
+        if (!cancelled) setError(errorText(e, t));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -83,25 +96,29 @@ export default function Schedule() {
     return () => {
       cancelled = true;
     };
-  }, [club.id, date, version]);
+  }, [club.id, date, version, t]);
 
   const reload = () => setVersion((v) => v + 1);
   const today = todayIn(club.timezone);
   const timeline = data && data.courts.length ? timelineOf(data.slots[data.courts[0].id] ?? []) : null;
   const dayIsOver = timeline !== null && timeline.end - MINUTE <= now;
-  const clubIsOpenNow = timeline !== null && date === today && now >= timeline.start && now < timeline.end - MINUTE;
+  const clubIsOpenNow =
+    timeline !== null && date === today && now >= timeline.start && now < timeline.end - MINUTE;
 
   const stats = useMemo(() => {
     if (!data || !timeline) return null;
     const courtMs = (timeline.end - timeline.start) * data.courts.length;
     const bookedMs = data.bookings.reduce(
-      (sum, b) => sum + Math.max(0, Math.min(shownEnd(b, now), timeline.end) - Math.max(Date.parse(b.start_at), timeline.start)),
+      (sum, b) =>
+        sum +
+        Math.max(0, Math.min(shownEnd(b, now), timeline.end) - Math.max(Date.parse(b.start_at), timeline.start)),
       0,
     );
     return {
       count: data.bookings.length,
       live: data.bookings.filter((b) => b.is_open).length,
-      revenue: data.bookings.reduce((sum, b) => sum + Number(b.price), 0),
+      revenue: data.bookings.reduce((sum, b) => sum + Number(b.total), 0),
+      due: data.bookings.reduce((sum, b) => sum + (b.is_open ? 0 : Math.max(0, Number(b.balance))), 0),
       occupancy: courtMs ? Math.round((bookedMs / courtMs) * 100) : 0,
     };
   }, [data, timeline, now]);
@@ -120,38 +137,38 @@ export default function Schedule() {
     <div className="page">
       <header className="page-head">
         <div>
-          <p className="eyebrow">Schedule</p>
+          <p className="eyebrow">{t("nav.schedule")}</p>
           <h1>{longDate(date)}</h1>
         </div>
         <div className="date-nav">
-          <button className="btn" onClick={() => setDate(addDays(date, -1))} aria-label="Previous day">
-            ‹
+          <button className="btn" onClick={() => setDate(addDays(date, -1))} aria-label={t("schedule.prevDay")}>
+            <span className="flip">‹</span>
           </button>
           <button className="btn" onClick={() => setDate(today)} disabled={date === today}>
-            Today
+            {t("schedule.today")}
           </button>
           <input
             type="date"
             className="date-input"
             value={date}
             onChange={(e) => e.target.value && setDate(e.target.value)}
-            aria-label="Date"
+            aria-label={t("schedule.date")}
           />
-          <button className="btn" onClick={() => setDate(addDays(date, 1))} aria-label="Next day">
-            ›
+          <button className="btn" onClick={() => setDate(addDays(date, 1))} aria-label={t("schedule.nextDay")}>
+            <span className="flip">›</span>
           </button>
         </div>
       </header>
 
       {stats && (
         <div className="stat-row">
-          <StatTile label="Bookings" value={String(stats.count)}>
-            {stats.live > 0 && <span className="stat-sub live-sub">● {stats.live} playing now</span>}
+          <StatTile label={t("schedule.bookings")} value={String(stats.count)}>
+            {stats.live > 0 && <span className="stat-sub live-sub">● {t("schedule.playingNow", { count: stats.live })}</span>}
           </StatTile>
-          <StatTile label="Booked revenue" value={money(stats.revenue, club.currency)}>
-            {stats.live > 0 && <span className="stat-sub">open play is added when stopped</span>}
+          <StatTile label={t("schedule.billed")} value={money(stats.revenue, club.currency)}>
+            {stats.due > 0 && <span className="stat-sub due-sub">{t("schedule.stillDue", { amount: money(stats.due, club.currency) })}</span>}
           </StatTile>
-          <StatTile label="Occupancy" value={`${stats.occupancy}%`}>
+          <StatTile label={t("schedule.occupancy")} value={`${stats.occupancy}%`}>
             <div className="meter" aria-hidden>
               <span style={{ width: `${stats.occupancy}%` }} />
             </div>
@@ -163,44 +180,44 @@ export default function Schedule() {
 
       {dayIsOver && (
         <div className="banner">
-          <span>
-            {date === today
-              ? "Today's booking hours are over, so no new booking can start."
-              : "This day is in the past, so no slot can be booked."}
-          </span>
+          <span>{date === today ? t("schedule.todayOver") : t("schedule.dayPast")}</span>
           <button className="btn btn-primary btn-small" onClick={() => setDate(addDays(today, 1))}>
-            Go to tomorrow →
+            {t("schedule.goTomorrow")}
           </button>
         </div>
       )}
 
       {data && data.courts.length === 0 && (
         <div className="card empty">
-          <h3>No active courts</h3>
-          <p className="muted">Add a court on the Courts page to start taking bookings.</p>
+          <h3>{t("schedule.noCourts")}</h3>
+          <p className="muted">{t("schedule.noCourtsHint")}</p>
         </div>
       )}
 
       {data && timeline && (
         <>
           <div className="legend">
-            <span><i className="sw sw-free" /> Free (click to book any time)</span>
-            <span><i className="sw sw-booked" /> Booked</span>
-            <span><i className="sw sw-live" /> Open play (running)</span>
-            <span><i className="sw sw-closed" /> Past or no price</span>
+            <span><i className="sw sw-free" /> {t("schedule.legendFree")}</span>
+            <span><i className="sw sw-booked" /> {t("schedule.legendBooked")}</span>
+            <span><i className="sw sw-live" /> {t("schedule.legendLive")}</span>
+            <span><i className="sw sw-due" /> {t("schedule.legendDue")}</span>
+            <span><i className="sw sw-closed" /> {t("schedule.legendClosed")}</span>
           </div>
           <div className={`board-wrap${loading ? " is-loading" : ""}`}>
-            <div className="board" style={{ gridTemplateColumns: `64px repeat(${data.courts.length}, minmax(170px, 1fr))` }}>
+            <div
+              className="board"
+              style={{ gridTemplateColumns: `64px repeat(${data.courts.length}, minmax(170px, 1fr))` }}
+            >
               <div className="board-corner" />
               {data.courts.map((court) => (
                 <div key={court.id} className="board-court">
                   <div>
                     <strong>{court.name}</strong>
-                    <span>{court.kind}</span>
+                    <span>{t(`courts.${court.kind}`)}</span>
                   </div>
                   {clubIsOpenNow && (
-                    <button className="open-play-btn" onClick={() => setOpenPlayCourt(court)} title="Start open play now">
-                      ▶ Open play
+                    <button className="open-play-btn" onClick={() => setOpenPlayCourt(court)} title={t("openPlay.title")}>
+                      ▶ {t("openPlay.button")}
                     </button>
                   )}
                 </div>
@@ -225,7 +242,7 @@ export default function Schedule() {
                   bookings={data.bookings.filter((b) => b.court === court.id)}
                   now={now}
                   onPick={(slot) => pick(court, slot)}
-                  onOpen={setOpened}
+                  onOpen={(b) => setOpened(b.id)}
                 />
               ))}
               {date === today && now > timeline.start && now < timeline.end && (
@@ -243,7 +260,7 @@ export default function Schedule() {
           court={picked.court}
           date={date}
           start={picked.start}
-          timeline={timeline}
+          dayEnd={timeline.end}
           onClose={() => setPicked(null)}
           onDone={() => {
             setPicked(null);
@@ -262,11 +279,9 @@ export default function Schedule() {
           }}
         />
       )}
-      {opened && timeline && (
-        <BookingModal
-          booking={opened}
-          date={date}
-          timeline={timeline}
+      {opened !== null && (
+        <BillModal
+          bookingId={opened}
           now={now}
           onClose={() => setOpened(null)}
           onChanged={() => {
@@ -296,6 +311,7 @@ function CourtColumn({
   onPick: (slot: Slot) => void;
   onOpen: (booking: Booking) => void;
 }) {
+  const t = useT();
   const { club } = useClub();
   return (
     <div className="board-col" style={{ height: timeline.rows.length * ROW_HEIGHT }}>
@@ -304,7 +320,7 @@ function CourtColumn({
         const style = { top: i * ROW_HEIGHT, height: ROW_HEIGHT - 2 };
         if (!open) {
           return (
-            <div key={slot.start} className="cell cell-closed" style={style} title={slot.price === null ? "No price rule covers this time" : undefined}>
+            <div key={slot.start} className="cell cell-closed" style={style} title={slot.price === null ? t("schedule.noPrice") : undefined}>
               —
             </div>
           );
@@ -315,10 +331,10 @@ function CourtColumn({
             className="cell cell-free"
             style={style}
             onClick={() => onPick(slot)}
-            aria-label={`Book ${court.name} from ${clockTime(slot.start, club.timezone)}`}
+            aria-label={t("schedule.bookAt", { court: court.name, time: clockTime(slot.start, club.timezone) })}
           >
             <span className="cell-price">{money(slot.price, club.currency)}</span>
-            <span className="cell-plus">+ Book</span>
+            <span className="cell-plus">+ {t("schedule.book")}</span>
           </button>
         );
       })}
@@ -330,6 +346,7 @@ function CourtColumn({
         const top = y(timeline, start);
         const height = Math.max(y(timeline, end) - top, 20);
         const tall = height >= ROW_HEIGHT * 1.6;
+        const due = !b.is_open && b.payment_status !== "paid";
         return (
           <div key={b.id}>
             {b.is_open && hold > end && (
@@ -337,43 +354,40 @@ function CourtColumn({
                 className="booking-hold"
                 style={{ top: top + height, height: y(timeline, hold) - top - height }}
                 onClick={() => onOpen(b)}
-                title="Held for open play until it is stopped"
+                title={t("schedule.heldTitle")}
               >
-                <span>held until stopped</span>
+                <span>{t("schedule.held")}</span>
               </button>
             )}
             <button
-              className={`booking${b.is_open ? " is-live" : ""}${!b.is_open && end <= now ? " is-past" : ""}`}
+              className={`booking${b.is_open ? " is-live" : ""}${!b.is_open && end <= now ? " is-past" : ""}${due ? " is-due" : ""}`}
               style={{ top, height }}
               onClick={() => onOpen(b)}
             >
               <strong>
                 {b.is_open && <span className="live-dot" aria-hidden />}
+                {b.series && <span aria-label={t("bill.weekly")}>↻</span>}
                 {b.customer_name}
               </strong>
               {(tall || b.is_open) && (
                 <span>
                   {b.is_open
-                    ? `since ${clockTime(b.start_at, club.timezone)} · ${duration(now - Date.parse(b.start_at))}`
-                    : `${clockTime(b.start_at, club.timezone)}–${clockTime(b.end_at, club.timezone)}`}
+                    ? `${t("bill.since", { time: clockTime(b.start_at, club.timezone) })} · ${duration(now - Date.parse(b.start_at))}`
+                    : timeRange(b.start_at, b.end_at, club.timezone)}
                 </span>
               )}
-              {tall && !b.is_open && <span className="cell-price">{money(b.price, club.currency)}</span>}
+              {tall && !b.is_open && (
+                <span className="cell-price">
+                  {money(b.total, club.currency)}
+                  {due && <em>{t(`pay.${b.payment_status}`)}</em>}
+                </span>
+              )}
             </button>
           </div>
         );
       })}
     </div>
   );
-}
-
-function useNow() {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 30_000);
-    return () => window.clearInterval(id);
-  }, []);
-  return now;
 }
 
 function StatTile({ label, value, children }: { label: string; value: string; children?: React.ReactNode }) {
@@ -386,68 +400,84 @@ function StatTile({ label, value, children }: { label: string; value: string; ch
   );
 }
 
-function hhmm(ms: number, timeZone: string) {
-  return clockTime(new Date(ms).toISOString(), timeZone);
-}
-
-/** "HH:MM" on the board's day, in the club's timezone. "00:00" as an end means midnight. */
-function toIso(date: string, time: string, offset: string, isEnd: boolean) {
-  const day = isEnd && time === "00:00" ? addDays(date, 1) : date;
-  return `${day}T${time}:00${offset}`;
-}
-
 const QUICK = [60, 90, 120];
 
 function NewBookingModal({
   court,
   date,
   start,
-  timeline,
+  dayEnd,
   onClose,
   onDone,
 }: {
   court: Court;
   date: string;
   start: number;
-  timeline: Timeline;
+  dayEnd: number;
   onClose: () => void;
   onDone: () => void;
 }) {
+  const t = useT();
   const { club } = useClub();
   const notify = useToast();
-  const [from, setFrom] = useState(() => hhmm(start, club.timezone));
-  const [to, setTo] = useState(() => hhmm(Math.min(start + 60 * MINUTE, timeline.end), club.timezone));
+  const hhmm = (ms: number) => clockTime(new Date(ms).toISOString(), club.timezone);
+  const [from, setFrom] = useState(() => hhmm(start));
+  const [to, setTo] = useState(() => hhmm(Math.min(start + 60 * MINUTE, dayEnd)));
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [repeat, setRepeat] = useState(false);
+  const [weeks, setWeeks] = useState(8);
+  const [plan, setPlan] = useState<WeeklyWeek[] | null>(null);
   const [quote, setQuote] = useState<{ price: string | null; error: string | null }>({ price: null, error: null });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const startIso = toIso(date, from, timeline.offset, false);
-  const endIso = toIso(date, to, timeline.offset, true);
+  const startIso = localIso(date, from, club.timezone, false);
+  const endIso = localIso(date, to, club.timezone, true);
   const minutes = Math.round((Date.parse(endIso) - Date.parse(startIso)) / MINUTE);
 
   useEffect(() => {
+    setPlan(null);
     if (!from || !to) return;
     if (!(minutes > 0)) {
-      setQuote({ price: null, error: "The end must be after the start." });
+      setQuote({ price: null, error: t("error.end_before_start") });
       return;
     }
     let cancelled = false;
     const id = window.setTimeout(() => {
       Api.quote(court.id, startIso, endIso)
         .then((q) => !cancelled && setQuote({ price: q.price, error: null }))
-        .catch((e) => !cancelled && setQuote({ price: null, error: messageOf(e) }));
+        .catch((e) => !cancelled && setQuote({ price: null, error: errorText(e, t) }));
     }, 250);
     return () => {
       cancelled = true;
       window.clearTimeout(id);
     };
-  }, [court.id, startIso, endIso, minutes, from, to]);
+  }, [court.id, startIso, endIso, minutes, from, to, t]);
 
-  const setLength = (length: number) => {
-    const end = Math.min(Date.parse(startIso) + length * MINUTE, timeline.end);
-    setTo(hhmm(end, club.timezone));
+  useEffect(() => setPlan(null), [weeks, repeat]);
+
+  const setLength = (length: number) => setTo(hhmm(Math.min(Date.parse(startIso) + length * MINUTE, dayEnd)));
+
+  const body = () => ({
+    court: court.id,
+    start_at: startIso,
+    end_at: endIso,
+    customer_name: name.trim(),
+    customer_phone: phone.trim(),
+  });
+
+  const checkWeeks = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await Api.weekly({ ...body(), customer_name: name.trim() || "-", weeks, dry_run: true });
+      setPlan(result.skipped);
+    } catch (e) {
+      setError(errorText(e, t));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const submit = async (e: FormEvent) => {
@@ -455,41 +485,41 @@ function NewBookingModal({
     setBusy(true);
     setError(null);
     try {
-      await Api.createBooking({
-        court: court.id,
-        start_at: startIso,
-        end_at: endIso,
-        customer_name: name.trim(),
-        customer_phone: phone.trim(),
-      });
-      notify(`Booked ${court.name} for ${name.trim()}, ${from}–${to}`);
+      if (repeat) {
+        const result = await Api.weekly({ ...body(), weeks, dry_run: false });
+        notify(t("booking.weeklyDone", { booked: result.created.length, total: weeks }));
+      } else {
+        await Api.createBooking(body());
+        notify(t("booking.done", { court: court.name, name: name.trim(), time: ltr(`${from}–${to}`) }));
+      }
       onDone();
     } catch (err) {
       setBusy(false);
-      setError(
-        err instanceof ApiError && err.status === 409
-          ? "This time overlaps another booking on this court. Pick another time."
-          : messageOf(err),
-      );
+      setError(errorText(err, t));
     }
   };
 
+  const freeWeeks = plan?.filter((w) => w.ok).length ?? 0;
+
   return (
     <Modal
-      title="New booking"
+      title={t("booking.new")}
       subtitle={`${court.name} · ${longDate(date)}`}
       onClose={onClose}
       footer={
         <>
           <span className="total">
             {quote.price !== null ? money(quote.price, club.currency) : "—"}
-            <small>{minutes > 0 ? duration(minutes * MINUTE) : "total"}</small>
+            <small>
+              {minutes > 0 ? duration(minutes * MINUTE) : ""}
+              {repeat && ` · ${t("booking.perWeek")}`}
+            </small>
           </span>
           <button type="button" className="btn" onClick={onClose}>
-            Close
+            {t("common.close")}
           </button>
           <button className="btn btn-primary" form="new-booking" disabled={busy || quote.price === null}>
-            {busy ? "Booking…" : "Confirm booking"}
+            {busy ? t("common.saving") : repeat ? t("booking.confirmWeekly", { weeks }) : t("booking.confirm")}
           </button>
         </>
       }
@@ -497,35 +527,66 @@ function NewBookingModal({
       <form id="new-booking" onSubmit={submit} className="form">
         <div className="field-row">
           <label className="field">
-            <span>From</span>
+            <span>{t("booking.from")}</span>
             <input type="time" step={60} value={from} onChange={(e) => setFrom(e.target.value)} required />
           </label>
           <label className="field">
-            <span>Until</span>
+            <span>{t("booking.until")}</span>
             <input type="time" step={60} value={to} onChange={(e) => setTo(e.target.value)} required />
           </label>
         </div>
         <div className="quick">
           {QUICK.map((m) => (
-            <button
-              type="button"
-              key={m}
-              className={minutes === m ? "on" : ""}
-              onClick={() => setLength(m)}
-            >
-              {m} min
+            <button type="button" key={m} className={minutes === m ? "on" : ""} onClick={() => setLength(m)}>
+              {m} {t("booking.min")}
             </button>
           ))}
         </div>
         {quote.error && <p className="field-error">{quote.error}</p>}
-        <label className="field">
-          <span>Customer name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={120} />
+        <CustomerFields
+          name={name}
+          phone={phone}
+          onChange={(n, p) => {
+            setName(n);
+            setPhone(p);
+          }}
+        />
+
+        <label className="switch">
+          <input type="checkbox" checked={repeat} onChange={(e) => setRepeat(e.target.checked)} />
+          <span className="switch-track" aria-hidden />
+          <span>
+            {t("booking.repeatWeekly")}
+            <small className="muted">{t("booking.repeatHint")}</small>
+          </span>
         </label>
-        <label className="field">
-          <span>Phone (optional)</span>
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} maxLength={32} inputMode="tel" />
-        </label>
+        {repeat && (
+          <div className="weekly-box">
+            <div className="field-row">
+              <label className="field">
+                <span>{t("booking.weeks")}</span>
+                <input type="number" min={2} max={52} value={weeks} onChange={(e) => setWeeks(Math.min(52, Math.max(2, Number(e.target.value) || 2)))} />
+              </label>
+              <button type="button" className="btn" onClick={checkWeeks} disabled={busy || quote.price === null}>
+                {t("booking.checkWeeks")}
+              </button>
+            </div>
+            {plan && (
+              <>
+                <p className="small">{t("booking.weeksFree", { free: freeWeeks, total: plan.length })}</p>
+                <ul className="week-list">
+                  {plan.map((w) => (
+                    <li key={w.start_at} className={w.ok ? "ok" : "taken"}>
+                      <span>{w.ok ? "✓" : "✕"}</span>
+                      {shortDate(dateIn(w.start_at, club.timezone))}
+                      {!w.ok && <small>{w.code ? t(`error.${w.code}`) : w.detail}</small>}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
         {error && <div className="alert">{error}</div>}
       </form>
     </Modal>
@@ -543,6 +604,7 @@ function OpenPlayModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const t = useT();
   const { club } = useClub();
   const notify = useToast();
   const [name, setName] = useState("");
@@ -556,329 +618,40 @@ function OpenPlayModal({
     setError(null);
     try {
       await Api.startOpenPlay({ court: court.id, customer_name: name.trim(), customer_phone: phone.trim() });
-      notify(`Open play started on ${court.name}`);
+      notify(t("openPlay.started", { court: court.name }));
       onDone();
     } catch (err) {
-      setError(messageOf(err));
+      setError(errorText(err, t));
       setBusy(false);
     }
   };
 
   return (
     <Modal
-      title="Start open play"
-      subtitle={`${court.name} · starts now (${hhmm(now, club.timezone)})`}
+      title={t("openPlay.title")}
+      subtitle={t("openPlay.startsNow", { court: court.name, time: clockTime(new Date(now).toISOString(), club.timezone) })}
       onClose={onClose}
       footer={
         <>
           <button type="button" className="btn" onClick={onClose}>
-            Close
+            {t("common.close")}
           </button>
           <button className="btn btn-primary" form="open-play" disabled={busy}>
-            {busy ? "Starting…" : "▶ Start now"}
+            {busy ? t("common.saving") : `▶ ${t("openPlay.start")}`}
           </button>
         </>
       }
     >
       <form id="open-play" onSubmit={submit} className="form">
-        <p className="note">
-          No end time. The court stays reserved until you press <strong>Stop</strong>, or until the club
-          closes. The customer pays for the exact minutes played.
-        </p>
-        <label className="field">
-          <span>Customer name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={120} />
-        </label>
-        <label className="field">
-          <span>Phone (optional)</span>
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} maxLength={32} inputMode="tel" />
-        </label>
-        {error && <div className="alert">{error}</div>}
-      </form>
-    </Modal>
-  );
-}
-
-function BookingModal({
-  booking,
-  date,
-  timeline,
-  now,
-  onClose,
-  onChanged,
-}: {
-  booking: Booking;
-  date: string;
-  timeline: Timeline;
-  now: number;
-  onClose: () => void;
-  onChanged: () => void;
-}) {
-  const { club } = useClub();
-  const notify = useToast();
-  const [editing, setEditing] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [soFar, setSoFar] = useState<string | null>(null);
-  const started = Date.parse(booking.start_at);
-  const playedUntil = Math.max(Math.floor(now / MINUTE) * MINUTE, started + MINUTE);
-
-  useEffect(() => {
-    if (!booking.is_open) return;
-    const end = Math.min(playedUntil, Date.parse(booking.end_at));
-    Api.quote(booking.court, booking.start_at, new Date(end).toISOString())
-      .then((q) => setSoFar(q.price))
-      .catch(() => setSoFar(null));
-  }, [booking, playedUntil]);
-
-  const run = async (action: () => Promise<Booking>, done: (b: Booking) => string) => {
-    setBusy(true);
-    try {
-      const result = await action();
-      notify(done(result));
-      onChanged();
-    } catch (err) {
-      setError(messageOf(err));
-      setBusy(false);
-    }
-  };
-
-  const stop = () =>
-    run(
-      () => Api.stopOpenPlay(booking.id),
-      (b) =>
-        `Stopped. ${b.customer_name} played ${duration(Date.parse(b.end_at) - Date.parse(b.start_at))}: ${money(b.price, club.currency)}`,
-    );
-  const cancel = () => run(() => Api.cancelBooking(booking.id), () => "Booking cancelled. The court is free again.");
-
-  const timeLabel = booking.is_open
-    ? `since ${clockTime(booking.start_at, club.timezone)}`
-    : `${clockTime(booking.start_at, club.timezone)}–${clockTime(booking.end_at, club.timezone)}`;
-
-  if (editing) {
-    return (
-      <EditBookingModal
-        booking={booking}
-        date={date}
-        timeline={timeline}
-        onClose={() => setEditing(false)}
-        onSaved={onChanged}
-      />
-    );
-  }
-
-  return (
-    <Modal
-      title={booking.customer_name}
-      subtitle={`${booking.court_name} · ${timeLabel}`}
-      onClose={onClose}
-      footer={
-        confirming ? (
-          <>
-            <span className="muted grow">Cancel without charging?</span>
-            <button className="btn" onClick={() => setConfirming(false)} disabled={busy}>
-              Keep it
-            </button>
-            <button className="btn btn-danger" onClick={cancel} disabled={busy}>
-              {busy ? "Cancelling…" : "Yes, cancel"}
-            </button>
-          </>
-        ) : (
-          <>
-            <button className="btn btn-danger-ghost" onClick={() => setConfirming(true)}>
-              Cancel booking
-            </button>
-            <span className="grow" />
-            {booking.is_open ? (
-              <button className="btn btn-primary" onClick={stop} disabled={busy}>
-                {busy ? "Stopping…" : "■ Stop & charge"}
-              </button>
-            ) : (
-              <>
-                <button className="btn" onClick={() => setEditing(true)}>
-                  ✎ Change time
-                </button>
-                <button className="btn btn-primary" onClick={onClose}>
-                  Done
-                </button>
-              </>
-            )}
-          </>
-        )
-      }
-    >
-      {booking.is_open && (
-        <div className="live-panel">
-          <span className="live-badge">
-            <span className="live-dot" aria-hidden /> Playing now
-          </span>
-          <strong>{duration(now - started)}</strong>
-          <span>
-            {soFar !== null ? `${money(soFar, club.currency)} so far` : "Calculating…"} · charged by the minute
-          </span>
-        </div>
-      )}
-      <dl className="details">
-        <dt>Phone</dt>
-        <dd>{booking.customer_phone || "—"}</dd>
-        {!booking.is_open && (
-          <>
-            <dt>Price</dt>
-            <dd>{money(booking.price, club.currency)}</dd>
-          </>
-        )}
-        <dt>Booked at</dt>
-        <dd>
-          {new Date(booking.created_at).toLocaleString("en-GB", {
-            timeZone: club.timezone,
-            dateStyle: "medium",
-            timeStyle: "short",
-          })}
-        </dd>
-      </dl>
-      {error && <div className="alert">{error}</div>}
-    </Modal>
-  );
-}
-
-const ADJUST = [-30, -15, 15, 30, 60];
-
-function EditBookingModal({
-  booking,
-  date,
-  timeline,
-  onClose,
-  onSaved,
-}: {
-  booking: Booking;
-  date: string;
-  timeline: Timeline;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const { club } = useClub();
-  const notify = useToast();
-  const [from, setFrom] = useState(() => clockTime(booking.start_at, club.timezone));
-  const [to, setTo] = useState(() => clockTime(booking.end_at, club.timezone));
-  const [name, setName] = useState(booking.customer_name);
-  const [phone, setPhone] = useState(booking.customer_phone);
-  const [quote, setQuote] = useState<{ price: string | null; error: string | null }>({
-    price: booking.price,
-    error: null,
-  });
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const startIso = toIso(date, from, timeline.offset, false);
-  const endIso = toIso(date, to, timeline.offset, true);
-  const minutes = Math.round((Date.parse(endIso) - Date.parse(startIso)) / MINUTE);
-  const oldMinutes = Math.round((Date.parse(booking.end_at) - Date.parse(booking.start_at)) / MINUTE);
-  const timeChanged =
-    Date.parse(startIso) !== Date.parse(booking.start_at) || Date.parse(endIso) !== Date.parse(booking.end_at);
-
-  useEffect(() => {
-    if (!from || !to) return;
-    if (!(minutes > 0)) {
-      setQuote({ price: null, error: "The end must be after the start." });
-      return;
-    }
-    let cancelled = false;
-    const id = window.setTimeout(() => {
-      Api.quote(booking.court, startIso, endIso)
-        .then((q) => !cancelled && setQuote({ price: q.price, error: null }))
-        .catch((e) => !cancelled && setQuote({ price: null, error: messageOf(e) }));
-    }, 250);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(id);
-    };
-  }, [booking.court, startIso, endIso, minutes, from, to]);
-
-  const adjustEnd = (delta: number) => {
-    const end = Math.min(Math.max(Date.parse(endIso) + delta * MINUTE, Date.parse(startIso) + MINUTE), timeline.end);
-    setTo(hhmm(end, club.timezone));
-  };
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const updated = await Api.changeBooking(booking.id, {
-        ...(timeChanged ? { start_at: startIso, end_at: endIso } : {}),
-        customer_name: name.trim(),
-        customer_phone: phone.trim(),
-      });
-      notify(
-        timeChanged
-          ? `${updated.customer_name}: now ${from}–${to}, ${money(updated.price, club.currency)}`
-          : "Booking saved",
-      );
-      onSaved();
-    } catch (err) {
-      setBusy(false);
-      setError(
-        err instanceof ApiError && err.status === 409
-          ? "The new time overlaps another booking on this court."
-          : messageOf(err),
-      );
-    }
-  };
-
-  const diff = minutes - oldMinutes;
-
-  return (
-    <Modal
-      title="Change booking"
-      subtitle={`${booking.court_name} · was ${clockTime(booking.start_at, club.timezone)}–${clockTime(booking.end_at, club.timezone)}, ${money(booking.price, club.currency)}`}
-      onClose={onClose}
-      footer={
-        <>
-          <span className="total">
-            {quote.price !== null ? money(quote.price, club.currency) : "—"}
-            <small>
-              {minutes > 0 ? duration(minutes * MINUTE) : ""}
-              {timeChanged && minutes > 0 && diff !== 0 && ` (${diff > 0 ? "+" : "−"}${duration(Math.abs(diff) * MINUTE)})`}
-            </small>
-          </span>
-          <button type="button" className="btn" onClick={onClose}>
-            Back
-          </button>
-          <button className="btn btn-primary" form="edit-booking" disabled={busy || quote.price === null || !name.trim()}>
-            {busy ? "Saving…" : "Save"}
-          </button>
-        </>
-      }
-    >
-      <form id="edit-booking" onSubmit={submit} className="form">
-        <div className="field-row">
-          <label className="field">
-            <span>From</span>
-            <input type="time" step={60} value={from} onChange={(e) => setFrom(e.target.value)} required />
-          </label>
-          <label className="field">
-            <span>Until</span>
-            <input type="time" step={60} value={to} onChange={(e) => setTo(e.target.value)} required />
-          </label>
-        </div>
-        <div className="quick">
-          {ADJUST.map((m) => (
-            <button type="button" key={m} onClick={() => adjustEnd(m)} title={`${m > 0 ? "Extend" : "Shorten"} by ${Math.abs(m)} minutes`}>
-              {m > 0 ? `+${m}` : `−${-m}`} min
-            </button>
-          ))}
-        </div>
-        {quote.error && <p className="field-error">{quote.error}</p>}
-        <label className="field">
-          <span>Customer name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={120} />
-        </label>
-        <label className="field">
-          <span>Phone (optional)</span>
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} maxLength={32} inputMode="tel" />
-        </label>
-        {timeChanged && <p className="hint">The price is recalculated by the minute with today's price rules.</p>}
+        <p className="note">{t("openPlay.explain")}</p>
+        <CustomerFields
+          name={name}
+          phone={phone}
+          onChange={(n, p) => {
+            setName(n);
+            setPhone(p);
+          }}
+        />
         {error && <div className="alert">{error}</div>}
       </form>
     </Modal>

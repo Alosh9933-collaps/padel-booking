@@ -7,19 +7,23 @@ import {
   currentUsername,
   isLoggedIn,
   logout,
-  messageOf,
   rememberClubId,
   rememberedClubId,
   type Club,
 } from "./api";
 import { CourtArt, Logo } from "./components/Brand";
-import { ROLE_LABEL } from "./format";
+import { LanguageSwitch } from "./components/LanguageSwitch";
+import { errorText, useI18n } from "./i18n";
 import Courts from "./pages/Courts";
+import Customers from "./pages/Customers";
+import Daily from "./pages/Daily";
 import Login from "./pages/Login";
+import Menu from "./pages/Menu";
 import Prices from "./pages/Prices";
 import Revenue from "./pages/Revenue";
 import Schedule from "./pages/Schedule";
 import Settings from "./pages/Settings";
+import Staff from "./pages/Staff";
 import { ClubContext } from "./session";
 
 export default function App() {
@@ -42,14 +46,19 @@ export default function App() {
 }
 
 const NAV = [
-  { to: "/", label: "Schedule", icon: "▦", managersOnly: false },
-  { to: "/courts", label: "Courts", icon: "▭", managersOnly: false },
-  { to: "/prices", label: "Prices", icon: "◈", managersOnly: false },
-  { to: "/revenue", label: "Revenue", icon: "▮", managersOnly: true },
-  { to: "/settings", label: "Club settings", icon: "⚙", managersOnly: false },
+  { to: "/", key: "nav.schedule", icon: "▦", managersOnly: false },
+  { to: "/daily", key: "nav.daily", icon: "▤", managersOnly: false },
+  { to: "/customers", key: "nav.customers", icon: "☺", managersOnly: false },
+  { to: "/menu", key: "nav.menu", icon: "☕", managersOnly: false },
+  { to: "/revenue", key: "nav.revenue", icon: "▮", managersOnly: true },
+  { to: "/courts", key: "nav.courts", icon: "▭", managersOnly: false },
+  { to: "/prices", key: "nav.prices", icon: "◈", managersOnly: false },
+  { to: "/staff", key: "nav.staff", icon: "♙", managersOnly: true },
+  { to: "/settings", key: "nav.settings", icon: "⚙", managersOnly: false },
 ];
 
 function Shell({ onLogout }: { onLogout: () => void }) {
+  const { t } = useI18n();
   const [clubs, setClubs] = useState<Club[] | null>(null);
   const [clubId, setClubId] = useState<number | null>(rememberedClubId);
   const [error, setError] = useState<string | null>(null);
@@ -58,8 +67,8 @@ function Shell({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     Api.clubs()
       .then(setClubs)
-      .catch((e) => setError(messageOf(e)));
-  }, []);
+      .catch((e) => setError(errorText(e, t)));
+  }, [t]);
 
   const selectClub = useCallback((id: number) => {
     rememberClubId(id);
@@ -87,7 +96,7 @@ function Shell({ onLogout }: { onLogout: () => void }) {
 
   if (error) {
     return (
-      <CenteredMessage title="Could not load your clubs" action={<button className="btn" onClick={signOut}>Sign out</button>}>
+      <CenteredMessage title={t("shell.loadFailed")} action={<button className="btn" onClick={signOut}>{t("shell.signOut")}</button>}>
         {error}
       </CenteredMessage>
     );
@@ -95,9 +104,8 @@ function Shell({ onLogout }: { onLogout: () => void }) {
   if (!clubs) return <div className="splash"><Logo size={56} /></div>;
   if (!value) {
     return (
-      <CenteredMessage title="No club yet" action={<button className="btn" onClick={signOut}>Sign out</button>}>
-        Your account is not linked to any club. Ask the club owner to add you as staff
-        (Django admin → Memberships).
+      <CenteredMessage title={t("shell.noClub")} action={<button className="btn" onClick={signOut}>{t("shell.signOut")}</button>}>
+        {t("shell.noClubHint")}
       </CenteredMessage>
     );
   }
@@ -113,7 +121,7 @@ function Shell({ onLogout }: { onLogout: () => void }) {
                 className="club-switch"
                 value={value.club.id}
                 onChange={(e) => selectClub(Number(e.target.value))}
-                aria-label="Club"
+                aria-label={t("shell.club")}
               >
                 {clubs.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -131,20 +139,21 @@ function Shell({ onLogout }: { onLogout: () => void }) {
                 <span className="nav-icon" aria-hidden>
                   {item.icon}
                 </span>
-                {item.label}
+                {t(item.key)}
               </NavLink>
             ))}
           </nav>
           <CourtArt className="sidebar-court" />
+          <LanguageSwitch dark />
           <div className="me">
             <div className="avatar" aria-hidden>
               {currentUsername().slice(0, 1).toUpperCase() || "?"}
             </div>
             <div className="me-text">
-              <strong>{currentUsername() || "Signed in"}</strong>
-              <span className={`role role-${value.club.role}`}>{ROLE_LABEL[value.club.role]}</span>
+              <strong>{currentUsername() || t("shell.signedIn")}</strong>
+              <span className={`role role-${value.club.role}`}>{t(`role.${value.club.role}`)}</span>
             </div>
-            <button className="icon-btn on-dark" onClick={signOut} title="Sign out" aria-label="Sign out">
+            <button className="icon-btn on-dark" onClick={signOut} title={t("shell.signOut")} aria-label={t("shell.signOut")}>
               ⎋
             </button>
           </div>
@@ -152,9 +161,13 @@ function Shell({ onLogout }: { onLogout: () => void }) {
         <main className="main">
           <Routes>
             <Route path="/" element={<Schedule key={value.club.id} />} />
+            <Route path="/daily" element={<Daily key={value.club.id} />} />
+            <Route path="/customers" element={<Customers key={value.club.id} />} />
+            <Route path="/menu" element={<Menu key={value.club.id} />} />
             <Route path="/courts" element={<Courts key={value.club.id} />} />
             <Route path="/prices" element={<Prices key={value.club.id} />} />
             <Route path="/revenue" element={<Revenue key={value.club.id} />} />
+            <Route path="/staff" element={<Staff key={value.club.id} />} />
             <Route path="/settings" element={<Settings key={value.club.id} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

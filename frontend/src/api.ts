@@ -37,20 +37,56 @@ export interface Availability {
   slots: Slot[];
 }
 
+export type PaymentStatus = "unpaid" | "partial" | "paid" | "open";
+export type PaymentMethod = "cash" | "card" | "transfer";
+
 export interface Booking {
   id: number;
   court: number;
   court_name: string;
   start_at: string;
   end_at: string;
+  customer: number | null;
   customer_name: string;
   customer_phone: string;
   price: string;
-  status: "confirmed" | "cancelled";
+  status: "confirmed" | "cancelled" | "no_show";
   /** Open play still running: end_at is only a hold until closing time. */
   is_open: boolean;
+  /** Bookings of one weekly series share this id. */
+  series: string | null;
   created_at: string;
   cancelled_at: string | null;
+  court_total: string;
+  items_total: string;
+  total: string;
+  paid_total: string;
+  balance: string;
+  payment_status: PaymentStatus;
+}
+
+export interface BillItem {
+  id: number;
+  product: number | null;
+  name: string;
+  unit_price: string;
+  quantity: number;
+  total: string;
+  created_at: string;
+}
+
+export interface Payment {
+  id: number;
+  amount: string;
+  method: PaymentMethod;
+  payer_name: string;
+  created_at: string;
+  created_by_name: string;
+}
+
+export interface BookingBill extends Booking {
+  items: BillItem[];
+  payments: Payment[];
 }
 
 export interface PriceRule {
@@ -71,9 +107,70 @@ export interface RevenueReport {
   date_from: string;
   date_to: string;
   total: string;
+  buffet_total: string;
+  grand_total: string;
   bookings: number;
   by_court: { court: number; court_name: string; total: string; bookings: number }[];
-  by_day: { date: string; total: string; bookings: number }[];
+  by_day: { date: string; total: string; buffet: string; bookings: number }[];
+}
+
+export interface DailyReport {
+  club: number;
+  date: string;
+  currency: string;
+  received: string;
+  by_method: { method: PaymentMethod; total: string; count: number }[];
+  buffet: { name: string; quantity: number; total: string }[];
+  buffet_total: string;
+  bookings: number;
+  unpaid: Booking[];
+  unpaid_total: string;
+}
+
+export interface Product {
+  id: number;
+  club: number;
+  name: string;
+  category: string;
+  price: string;
+  is_active: boolean;
+}
+
+export interface Customer {
+  id: number;
+  club: number;
+  name: string;
+  phone: string;
+  notes: string;
+  created_at: string;
+  visits: number;
+  no_shows: number;
+  spent: string;
+  last_visit: string | null;
+}
+
+export interface StaffMember {
+  id: number;
+  club: number;
+  user: number;
+  username: string;
+  full_name: string;
+  role: Role;
+  last_login: string | null;
+}
+
+export interface WeeklyWeek {
+  start_at: string;
+  end_at: string;
+  price: string | null;
+  ok: boolean;
+  code: string | null;
+  detail: string | null;
+}
+
+export interface WeeklyResult {
+  created: Booking[];
+  skipped: WeeklyWeek[];
 }
 
 type Paged<T> = T[] | { results: T[] };
@@ -236,6 +333,8 @@ export function rememberClubId(id: number) {
 
 export type CourtInput = Pick<Court, "name" | "kind" | "is_active"> & { club: number };
 export type PriceRuleInput = Omit<PriceRule, "id">;
+export type ProductInput = Omit<Product, "id">;
+export type CustomerInput = Pick<Customer, "club" | "name" | "phone" | "notes">;
 export type BookingInput = {
   court: number;
   start_at: string;
@@ -255,17 +354,32 @@ export const Api = {
     api<Court>(`/courts/${id}/`, { method: "PATCH", body: patch }),
   availability: (courtId: number, date: string) =>
     api<Availability>(`/courts/${courtId}/availability/`, { query: { date } }),
-
-  bookings: (query: Query) => api<Paged<Booking>>("/bookings/", { query }).then((d) => asList(d)),
-  createBooking: (body: BookingInput) => api<Booking>("/bookings/", { method: "POST", body }),
-  changeBooking: (id: number, patch: Partial<Omit<BookingInput, "court">>) =>
-    api<Booking>(`/bookings/${id}/`, { method: "PATCH", body: patch }),
-  cancelBooking: (id: number) => api<Booking>(`/bookings/${id}/cancel/`, { method: "POST" }),
-  startOpenPlay: (body: Omit<BookingInput, "start_at" | "end_at">) =>
-    api<Booking>("/bookings/open/", { method: "POST", body }),
-  stopOpenPlay: (id: number) => api<Booking>(`/bookings/${id}/stop/`, { method: "POST" }),
   quote: (courtId: number, start: string, end: string) =>
     api<{ price: string }>(`/courts/${courtId}/quote/`, { query: { start, end } }),
+
+  bookings: (query: Query) => api<Paged<Booking>>("/bookings/", { query }).then((d) => asList(d)),
+  booking: (id: number) => api<BookingBill>(`/bookings/${id}/`),
+  createBooking: (body: BookingInput) => api<BookingBill>("/bookings/", { method: "POST", body }),
+  changeBooking: (id: number, patch: Partial<Omit<BookingInput, "court">>) =>
+    api<BookingBill>(`/bookings/${id}/`, { method: "PATCH", body: patch }),
+  cancelBooking: (id: number) => api<BookingBill>(`/bookings/${id}/cancel/`, { method: "POST" }),
+  cancelFollowing: (id: number) =>
+    api<Booking[]>(`/bookings/${id}/cancel-following/`, { method: "POST" }),
+  noShow: (id: number) => api<BookingBill>(`/bookings/${id}/no-show/`, { method: "POST" }),
+  startOpenPlay: (body: Omit<BookingInput, "start_at" | "end_at">) =>
+    api<BookingBill>("/bookings/open/", { method: "POST", body }),
+  stopOpenPlay: (id: number) => api<BookingBill>(`/bookings/${id}/stop/`, { method: "POST" }),
+  weekly: (body: BookingInput & { weeks: number; dry_run: boolean }) =>
+    api<WeeklyResult>("/bookings/weekly/", { method: "POST", body }),
+
+  addItem: (bookingId: number, product: number, quantity = 1) =>
+    api<BookingBill>(`/bookings/${bookingId}/items/`, { method: "POST", body: { product, quantity } }),
+  setItemQuantity: (bookingId: number, itemId: number, quantity: number) =>
+    api<BookingBill>(`/bookings/${bookingId}/items/${itemId}/`, { method: "PATCH", body: { quantity } }),
+  addPayment: (bookingId: number, body: { amount: string; method: PaymentMethod; payer_name: string }) =>
+    api<BookingBill>(`/bookings/${bookingId}/payments/`, { method: "POST", body }),
+  removePayment: (bookingId: number, paymentId: number) =>
+    api<BookingBill>(`/bookings/${bookingId}/payments/${paymentId}/`, { method: "DELETE" }),
 
   priceRules: (club: number) =>
     api<Paged<PriceRule>>("/price-rules/", { query: { club } }).then((d) => asList(d)),
@@ -274,6 +388,26 @@ export const Api = {
     api<PriceRule>(`/price-rules/${id}/`, { method: "PUT", body }),
   deletePriceRule: (id: number) => api<void>(`/price-rules/${id}/`, { method: "DELETE" }),
 
+  products: (club: number) => api<Paged<Product>>("/products/", { query: { club } }).then((d) => asList(d)),
+  createProduct: (body: ProductInput) => api<Product>("/products/", { method: "POST", body }),
+  updateProduct: (id: number, patch: Partial<ProductInput>) =>
+    api<Product>(`/products/${id}/`, { method: "PATCH", body: patch }),
+  deleteProduct: (id: number) => api<void>(`/products/${id}/`, { method: "DELETE" }),
+
+  customers: (club: number, search = "") =>
+    api<Paged<Customer>>("/customers/", { query: { club, search } }).then((d) => asList(d)),
+  createCustomer: (body: CustomerInput) => api<Customer>("/customers/", { method: "POST", body }),
+  updateCustomer: (id: number, patch: Partial<CustomerInput>) =>
+    api<Customer>(`/customers/${id}/`, { method: "PATCH", body: patch }),
+
+  staff: (club: number) => api<Paged<StaffMember>>("/staff/", { query: { club } }).then((d) => asList(d)),
+  addStaff: (body: { club: number; username: string; password: string; first_name: string; role: Role }) =>
+    api<StaffMember>("/staff/", { method: "POST", body }),
+  changeStaffRole: (id: number, role: Role) =>
+    api<StaffMember>(`/staff/${id}/`, { method: "PATCH", body: { role } }),
+  removeStaff: (id: number) => api<void>(`/staff/${id}/`, { method: "DELETE" }),
+
   revenue: (club: number, from: string, to: string) =>
     api<RevenueReport>("/reports/revenue/", { query: { club, from, to } }),
+  daily: (club: number, date: string) => api<DailyReport>("/reports/daily/", { query: { club, date } }),
 };
