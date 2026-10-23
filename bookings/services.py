@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from clubs.models import Customer, PriceRule, normalize_phone
 
+from .discounts import refresh_discount
 from .models import Booking
 
 # First key of the two-key Postgres advisory lock taken per court while booking.
@@ -213,6 +214,7 @@ def change_booking(booking, *, start_at=None, end_at=None, customer_name=None, c
         with transaction.atomic():
             _lock_court(booking.court_id)
             booking.save(update_fields=fields)
+            refresh_discount(booking)
     except IntegrityError as exc:
         if "booking_no_overlap" in str(exc):
             booking.refresh_from_db()
@@ -274,7 +276,8 @@ def stop_open_session(booking):
     booking.price = calculate_price(booking.court, booking.start_at, end_at)
     booking.is_open = False
     booking.save(update_fields=["end_at", "price", "is_open"])
-    return booking
+    # A percent discount applied while playing becomes real money now.
+    return refresh_discount(booking)
 
 
 def cancel_booking(booking):

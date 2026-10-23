@@ -1,4 +1,4 @@
-"""A booking's bill: court time plus buffet items, minus payments received."""
+"""A booking's bill: court time plus buffet items, minus a discount and the payments received."""
 
 from decimal import Decimal
 
@@ -7,6 +7,7 @@ from django.db.models.functions import Coalesce
 
 from buffet.models import BookingItem
 
+from .discounts import offers, refresh_discount
 from .models import Booking, Payment
 from .services import BookingError
 
@@ -42,7 +43,7 @@ def totals(booking):
     paid_total = getattr(booking, "paid_total", None)
     if paid_total is None:
         paid_total = sum((p.amount for p in booking.payments.all()), ZERO)
-    total = booking.price + items_total
+    total = booking.price + items_total - booking.discount
     balance = total - paid_total
     if booking.is_open:
         state = "open"
@@ -55,6 +56,7 @@ def totals(booking):
     return {
         "court_total": booking.price,
         "items_total": items_total,
+        "discount": booking.discount,
         "total": total,
         "paid_total": paid_total,
         "balance": balance,
@@ -78,15 +80,17 @@ def add_item(booking, product, quantity=1, created_by=None):
     if item:
         item.quantity += quantity
         item.save(update_fields=["quantity"])
-        return item
-    return BookingItem.objects.create(
-        booking=booking,
-        product=product,
-        name=product.name,
-        unit_price=product.price,
-        quantity=quantity,
-        created_by=created_by,
-    )
+    else:
+        item = BookingItem.objects.create(
+            booking=booking,
+            product=product,
+            name=product.name,
+            unit_price=product.price,
+            quantity=quantity,
+            created_by=created_by,
+        )
+    refresh_discount(booking)
+    return item
 
 
 def set_item_quantity(item, quantity):
@@ -94,11 +98,14 @@ def set_item_quantity(item, quantity):
     _ensure_billable(item.booking)
     if quantity < 0:
         raise BookingError("Quantity must be at least 0.", "bad_quantity")
+    booking = item.booking
     if quantity == 0:
         item.delete()
-        return None
-    item.quantity = quantity
-    item.save(update_fields=["quantity"])
+        item = None
+    else:
+        item.quantity = quantity
+        item.save(update_fields=["quantity"])
+    refresh_discount(booking)
     return item
 
 
@@ -112,3 +119,46 @@ def add_payment(booking, amount, method, payer_name="", created_by=None):
     return Payment.objects.create(
         booking=booking, amount=amount, method=method, payer_name=payer_name, created_by=created_by
     )
+
+
+def _set_discount(booking, *, kind, percent=None, fixed=None, scope=Booking.DiscountScope.COURT, note=""):
+    booking.discount_kind = kind
+    booking.discount_percent = percent
+    booking.discount_fixed = fixed
+    booking.discount_scope = scope
+    booking.discount_note = note
+    booking.save(update_fields=["discount_kind", "discount_percent", "discount_fixed", "discount_scope", "discount_note"])
+    return refresh_discount(booking)
+
+
+def apply_offer(booking, kind):
+    """Apply one of the loyalty offers the booking qualifies for (court time only)."""
+    _ensure_billable(booking)
+    offer = next((o for o in offers(booking) if o["kind"] == kind), None)
+    if offer is None:
+        raise BookingError("This booking does not qualify for that discount.", "offer_not_available")
+    # Category offers keep the category name; visit offers keep the visit number.
+    note = offer["note"] or str(offer["visit"] or "")
+    return _set_discount(booking, kind=kind, percent=Decimal(offer["percent"]), note=note)
+
+
+def apply_manual_discount(booking, *, percent=None, amount=None, scope=Booking.DiscountScope.TOTAL, note=""):
+    """A discount typed by staff: a percent of the court time or whole bill, or a fixed amount."""
+    _ensure_billable(booking)
+    if (percent is None) == (amount is None):
+        raise BookingError("Give either a percent or an amount.", "bad_discount")
+    if percent is not None and not (0 < percent <= 100):
+        raise BookingError("The percent must be between 1 and 100.", "bad_discount")
+    if amount is not None and amount <= 0:
+        raise BookingError("The amount must be more than zero.", "bad_discount")
+    if amount is not None:
+        scope = Booking.DiscountScope.TOTAL
+    return _set_discount(
+        booking, kind=Booking.DiscountKind.MANUAL, percent=percent, fixed=amount, scope=scope, note=note
+    )
+
+
+def remove_discount(booking):
+    _ensure_billable(booking)
+    return _set_discount(booking, kind=Booking.DiscountKind.NONE)
+

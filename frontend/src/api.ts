@@ -39,6 +39,7 @@ export interface Availability {
 
 export type PaymentStatus = "unpaid" | "partial" | "paid" | "open";
 export type PaymentMethod = "cash" | "card" | "transfer";
+export type DiscountKind = "" | "first_visit" | "nth_visit" | "category" | "manual";
 
 export interface Booking {
   id: number;
@@ -55,6 +56,13 @@ export interface Booking {
   is_open: boolean;
   /** Bookings of one weekly series share this id. */
   series: string | null;
+  /** The bill's one discount; `discount` is its money value. */
+  discount_kind: DiscountKind;
+  discount_percent: string | null;
+  discount_fixed: string | null;
+  discount_scope: "court" | "total";
+  discount_note: string;
+  discount: string;
   created_at: string;
   cancelled_at: string | null;
   court_total: string;
@@ -84,9 +92,36 @@ export interface Payment {
   created_by_name: string;
 }
 
+export interface Offer {
+  kind: "first_visit" | "nth_visit" | "category";
+  percent: number;
+  amount: string;
+  visit: number | null;
+  note: string;
+}
+
 export interface BookingBill extends Booking {
   items: BillItem[];
   payments: Payment[];
+  /** Loyalty discounts this booking qualifies for, best first. */
+  offers: Offer[];
+}
+
+export interface CustomerCategory {
+  id: number;
+  club: number;
+  name: string;
+  color: string;
+  discount_percent: number;
+  customers: number;
+}
+
+export interface DiscountSettings {
+  first_visit_enabled: boolean;
+  first_visit_percent: number;
+  nth_visit_enabled: boolean;
+  nth_visit_every: number;
+  nth_visit_percent: number;
 }
 
 export interface PriceRule {
@@ -108,10 +143,11 @@ export interface RevenueReport {
   date_to: string;
   total: string;
   buffet_total: string;
+  discount_total: string;
   grand_total: string;
   bookings: number;
   by_court: { court: number; court_name: string; total: string; bookings: number }[];
-  by_day: { date: string; total: string; buffet: string; bookings: number }[];
+  by_day: { date: string; total: string; buffet: string; discounts: string; bookings: number }[];
 }
 
 export interface DailyReport {
@@ -122,6 +158,7 @@ export interface DailyReport {
   by_method: { method: PaymentMethod; total: string; count: number }[];
   buffet: { name: string; quantity: number; total: string }[];
   buffet_total: string;
+  discount_total: string;
   bookings: number;
   unpaid: Booking[];
   unpaid_total: string;
@@ -141,6 +178,9 @@ export interface Customer {
   club: number;
   name: string;
   phone: string;
+  category: number | null;
+  category_name: string | null;
+  category_color: string | null;
   notes: string;
   created_at: string;
   visits: number;
@@ -334,7 +374,11 @@ export function rememberClubId(id: number) {
 export type CourtInput = Pick<Court, "name" | "kind" | "is_active"> & { club: number };
 export type PriceRuleInput = Omit<PriceRule, "id">;
 export type ProductInput = Omit<Product, "id">;
-export type CustomerInput = Pick<Customer, "club" | "name" | "phone" | "notes">;
+export type CustomerInput = Pick<Customer, "club" | "name" | "phone" | "notes" | "category">;
+export type CategoryInput = Omit<CustomerCategory, "id" | "customers">;
+export type DiscountInput =
+  | { kind: "first_visit" | "nth_visit" | "category" }
+  | { kind: "manual"; percent?: string; amount?: string; scope: "court" | "total"; note: string };
 export type BookingInput = {
   court: number;
   start_at: string;
@@ -376,6 +420,10 @@ export const Api = {
     api<BookingBill>(`/bookings/${bookingId}/items/`, { method: "POST", body: { product, quantity } }),
   setItemQuantity: (bookingId: number, itemId: number, quantity: number) =>
     api<BookingBill>(`/bookings/${bookingId}/items/${itemId}/`, { method: "PATCH", body: { quantity } }),
+  applyDiscount: (bookingId: number, body: DiscountInput) =>
+    api<BookingBill>(`/bookings/${bookingId}/discount/`, { method: "POST", body }),
+  removeDiscount: (bookingId: number) =>
+    api<BookingBill>(`/bookings/${bookingId}/discount/`, { method: "DELETE" }),
   addPayment: (bookingId: number, body: { amount: string; method: PaymentMethod; payer_name: string }) =>
     api<BookingBill>(`/bookings/${bookingId}/payments/`, { method: "POST", body }),
   removePayment: (bookingId: number, paymentId: number) =>
@@ -394,11 +442,22 @@ export const Api = {
     api<Product>(`/products/${id}/`, { method: "PATCH", body: patch }),
   deleteProduct: (id: number) => api<void>(`/products/${id}/`, { method: "DELETE" }),
 
-  customers: (club: number, search = "") =>
-    api<Paged<Customer>>("/customers/", { query: { club, search } }).then((d) => asList(d)),
+  customers: (club: number, search = "", category = "") =>
+    api<Paged<Customer>>("/customers/", { query: { club, search, category } }).then((d) => asList(d)),
   createCustomer: (body: CustomerInput) => api<Customer>("/customers/", { method: "POST", body }),
   updateCustomer: (id: number, patch: Partial<CustomerInput>) =>
     api<Customer>(`/customers/${id}/`, { method: "PATCH", body: patch }),
+
+  categories: (club: number) =>
+    api<Paged<CustomerCategory>>("/customer-categories/", { query: { club } }).then((d) => asList(d)),
+  createCategory: (body: CategoryInput) =>
+    api<CustomerCategory>("/customer-categories/", { method: "POST", body }),
+  updateCategory: (id: number, patch: Partial<CategoryInput>) =>
+    api<CustomerCategory>(`/customer-categories/${id}/`, { method: "PATCH", body: patch }),
+  deleteCategory: (id: number) => api<void>(`/customer-categories/${id}/`, { method: "DELETE" }),
+  discountSettings: (club: number) => api<DiscountSettings>(`/clubs/${club}/discounts/`),
+  updateDiscountSettings: (club: number, patch: Partial<DiscountSettings>) =>
+    api<DiscountSettings>(`/clubs/${club}/discounts/`, { method: "PATCH", body: patch }),
 
   staff: (club: number) => api<Paged<StaffMember>>("/staff/", { query: { club } }).then((d) => asList(d)),
   addStaff: (body: { club: number; username: string; password: string; first_name: string; role: Role }) =>

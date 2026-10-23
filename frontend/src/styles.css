@@ -644,3 +644,62 @@ input:disabled, select:disabled { background: var(--line-2); color: var(--ink-2)
 .tip-buffet { background: #f0a55e; }
 .stat-label .sw { width: 10px; height: 10px; margin-inline-end: 4px; vertical-align: -1px; }
 
+
+/* ---------- Loyalty, categories, discounts ---------- */
+.tabs button { flex-direction: row; gap: 6px; }
+.cat-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 2px 10px 2px 8px; border-radius: 99px; background: color-mix(in srgb, var(--cat) 14%, #fff); color: color-mix(in srgb, var(--cat) 75%, #000); white-space: nowrap; }
+.cat-badge i, .cat-filter i, .cat-row > i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--cat); flex: none; }
+.cat-filter { display: flex; flex-wrap: wrap; gap: 6px; }
+.cat-filter button {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 99px;
+  border: 1px solid var(--line); background: #fff; font-size: 13px; font-weight: 600; color: var(--ink-2); cursor: pointer;
+}
+.cat-filter button small { font-weight: 500; color: var(--muted); }
+.cat-filter button.on { border-color: var(--navy); background: var(--navy); color: #fff; }
+.cat-filter button.on small { color: rgba(255, 255, 255, 0.7); }
+.cat-pick button.on { border-color: var(--cat, var(--navy)); background: color-mix(in srgb, var(--cat, var(--navy)) 14%, #fff); color: var(--ink); }
+.cat-pick button.on small { color: var(--ink-2); }
+.tag-new { margin-inline-start: 8px; background: #f4fbcf; color: #5d6c0a; }
+.loyalty { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.loyalty-bar { width: 56px; height: 6px; border-radius: 99px; background: var(--line-2); overflow: hidden; }
+.loyalty-bar span { display: block; height: 100%; border-radius: 99px; background: var(--court); }
+.loyalty.is-next { color: #9a5a0c; }
+.loyalty.is-next .loyalty-bar span { background: #d97a1f; }
+.loyalty-card { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 16px; padding: 10px 14px; border-radius: 12px; background: #f6f8f5; }
+.rule { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; transition: border-color 0.15s, background 0.15s; }
+.rule.is-on { border-color: var(--ok); background: #f4fbf7; }
+.rule-inputs { display: flex; flex-wrap: wrap; gap: 10px 18px; }
+.rule-input { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.rule-input input { width: 76px; }
+.rule .hint { margin: 0; }
+.cat-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line-2); }
+.cat-row:last-child { border-bottom: 0; }
+.cat-row > i { width: 12px; height: 12px; }
+.cat-row .grow { display: flex; flex-direction: column; }
+.cat-row small { color: var(--muted); font-size: 12px; }
+.chip-discount { background: #fdf0dc; color: #9a5a0c; }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatches button { width: 30px; height: 30px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 1px var(--line); cursor: pointer; }
+.swatches button.on { box-shadow: 0 0 0 2px var(--ink); }
+
+.bill-discount > span:first-child { color: #9a5a0c; }
+.bill-discount > strong { color: #9a5a0c; }
+.discount-panel { display: flex; flex-direction: column; gap: 8px; padding: 8px 0 4px; }
+.offer { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: #fff7ea; border: 1px solid #f3d7ae; }
+.offer-icon { font-size: 20px; }
+.offer .grow { display: flex; flex-direction: column; }
+.offer small { color: #7a4708; font-size: 12px; }
+.add-discount { align-self: flex-start; font-size: 13px; }
+.discount-form { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 10px; background: #f6f8f5; }
+.discount-row { display: flex; gap: 8px; align-items: center; }
+.discount-row input { flex: 1; min-width: 0; }
+.discount-form .quick { margin-top: 0; }
+.discount-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.bill-refund { background: #e6f0fc; color: var(--court-dark); }
+.cash-box { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 10px; background: #fff; border: 1px dashed var(--ok); }
+.cash-box .quick { margin-top: 0; }
+.change { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 12px; border-radius: 10px; }
+.change span { font-weight: 700; }
+.change strong { font: 700 28px var(--display); font-variant-numeric: tabular-nums; }
+.change-ok { background: #e1f4ea; color: var(--ok); }
+.change-short { background: #fcecec; color: var(--danger); }

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 
-import { Api, type BookingBill, type PaymentMethod, type Product } from "../api";
-import { clockTime, dateIn, dateTime, duration, longDate, ltr, money, timeRange, zoneOffset } from "../format";
-import { errorText, useT } from "../i18n";
+import { Api, type Booking, type BookingBill, type DiscountInput, type Offer, type PaymentMethod, type Product } from "../api";
+import { clockTime, dateIn, dateTime, duration, longDate, ltr, minus, money, timeRange, zoneOffset } from "../format";
+import { errorText, useT, type T } from "../i18n";
 import { useClub, useToast } from "../session";
 import { Modal } from "./Modal";
 
@@ -19,6 +19,22 @@ function nextDay(day: string) {
   const d = new Date(`${day}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + 1);
   return d.toISOString().slice(0, 10);
+}
+
+/** What a discount is called on the bill, in the UI language. */
+export function discountLabel(kind: Booking["discount_kind"] | Offer["kind"], note: string, t: T): string {
+  switch (kind) {
+    case "first_visit":
+      return t("discount.first_visit");
+    case "nth_visit":
+      return t("discount.nth_visit", { visit: note });
+    case "category":
+      return t("discount.category", { name: note });
+    case "manual":
+      return note ? t("discount.manualWith", { note }) : t("discount.manual");
+    default:
+      return "";
+  }
 }
 
 export function PaymentBadge({ booking }: { booking: Pick<BookingBill, "payment_status"> }) {
@@ -267,6 +283,39 @@ export function BillModal({
                 ☕ {t("bill.addFromBuffet")}
               </button>
             )}
+            {bill.discount_kind && (
+              <div className="bill-line bill-discount">
+                <span>
+                  {discountLabel(bill.discount_kind, bill.discount_note, t)}
+                  <small>
+                    {bill.discount_fixed !== null
+                      ? t("discount.fixedAmount")
+                      : t(bill.discount_scope === "court" ? "discount.percentOfCourt" : "discount.percentOfBill", {
+                          percent: Number(bill.discount_percent),
+                        })}
+                  </small>
+                </span>
+                {active && (
+                  <button
+                    className="icon-btn"
+                    disabled={busy}
+                    onClick={() => run(() => Api.removeDiscount(bill.id), () => t("discount.removed"))}
+                    title={t("discount.remove")}
+                    aria-label={t("discount.remove")}
+                  >
+                    ✕
+                  </button>
+                )}
+                <strong>{minus(money(bill.discount, club.currency))}</strong>
+              </div>
+            )}
+            {active && !bill.discount_kind && (
+              <DiscountPanel
+                bill={bill}
+                busy={busy}
+                onApply={(body, message) => run(() => Api.applyDiscount(bill.id, body), () => message)}
+              />
+            )}
             <div className="bill-total">
               <span>{t("bill.total")}</span>
               <strong>{bill.is_open ? `${money(bill.items_total, club.currency)} + …` : money(bill.total, club.currency)}</strong>
@@ -279,6 +328,12 @@ export function BillModal({
               <div className="bill-due">
                 <span>{t("bill.due")}</span>
                 <strong>{money(bill.balance, club.currency)}</strong>
+              </div>
+            )}
+            {!bill.is_open && Number(bill.balance) < 0 && (
+              <div className="bill-due bill-refund">
+                <span>{t("bill.refund")}</span>
+                <strong>{money(-Number(bill.balance), club.currency)}</strong>
               </div>
             )}
           </section>
@@ -316,17 +371,32 @@ function Payments({
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState<PaymentMethod>("cash");
   const [payer, setPayer] = useState("");
+  const [received, setReceived] = useState("");
 
   // Suggest the full balance whenever it changes.
   useEffect(() => {
     setAmount(balance > 0 ? String(balance) : "");
+    setReceived("");
   }, [balance]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const ok = await onPay({ amount, method, payer_name: payer.trim() });
-    if (ok) setPayer("");
+    if (ok) {
+      setPayer("");
+      setReceived("");
+    }
   };
+
+  // Cash: what the customer handed over, and the change to give back.
+  const due = Number(amount) || 0;
+  const handed = Number(received) || 0;
+  const change = handed - due;
+  const notes = useMemo(() => {
+    const values = new Set<number>([due]);
+    for (const step of [100, 500, 1000, 5000]) values.add(Math.ceil(due / step) * step);
+    return [...values].filter((v) => v > 0).sort((a, b) => a - b).slice(0, 5);
+  }, [due]);
 
   const canPay = bill.status !== "cancelled" && (bill.is_open || balance > 0);
 
@@ -369,6 +439,40 @@ function Payments({
               <input value={payer} onChange={(e) => setPayer(e.target.value)} maxLength={120} placeholder={t("common.optional")} />
             </label>
           </div>
+          {method === "cash" && due > 0 && (
+            <div className="cash-box">
+              <label className="field">
+                <span>{t("cash.received")}</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={received}
+                  onChange={(e) => setReceived(e.target.value)}
+                  placeholder={t("cash.receivedHint")}
+                />
+              </label>
+              <div className="quick">
+                {notes.map((v) => (
+                  <button type="button" key={v} className={handed === v ? "on" : ""} onClick={() => setReceived(String(v))}>
+                    {v === due ? t("cash.exact") : money(v, club.currency)}
+                  </button>
+                ))}
+              </div>
+              {received !== "" &&
+                (change >= 0 ? (
+                  <div className="change change-ok">
+                    <span>{t("cash.change")}</span>
+                    <strong>{money(change, club.currency)}</strong>
+                  </div>
+                ) : (
+                  <div className="change change-short">
+                    <span>{t("cash.short")}</span>
+                    <strong>{money(-change, club.currency)}</strong>
+                  </div>
+                ))}
+            </div>
+          )}
           {!bill.is_open && balance > 0 && (
             <div className="quick">
               <span className="muted small">{t("bill.split")}</span>
@@ -388,6 +492,121 @@ function Payments({
         </form>
       )}
     </section>
+  );
+}
+
+const QUICK_PERCENTS = [10, 20, 50, 100];
+
+/** Loyalty offers the booking qualifies for, and a form for a manual discount. */
+function DiscountPanel({
+  bill,
+  busy,
+  onApply,
+}: {
+  bill: BookingBill;
+  busy: boolean;
+  onApply: (body: DiscountInput, message: string) => void;
+}) {
+  const t = useT();
+  const { club } = useClub();
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"percent" | "amount">("percent");
+  const [value, setValue] = useState("");
+  const [scope, setScope] = useState<"court" | "total">("total");
+  const [note, setNote] = useState("");
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const body: DiscountInput =
+      mode === "percent"
+        ? { kind: "manual", percent: value, scope, note: note.trim() }
+        : { kind: "manual", amount: value, scope: "total", note: note.trim() };
+    onApply(body, t("discount.applied"));
+  };
+
+  return (
+    <div className="discount-panel">
+      {bill.offers.map((offer) => (
+        <div key={offer.kind} className="offer">
+          <span className="offer-icon" aria-hidden>
+            🎁
+          </span>
+          <span className="grow">
+            <strong>{discountLabel(offer.kind, offer.note || String(offer.visit ?? ""), t)}</strong>
+            <small>
+              {t("discount.percentOfCourt", { percent: offer.percent })}
+              {!bill.is_open && ` · ${minus(money(offer.amount, club.currency))}`}
+            </small>
+          </span>
+          <button
+            type="button"
+            className="btn btn-small btn-primary"
+            disabled={busy}
+            onClick={() => onApply({ kind: offer.kind }, t("discount.applied"))}
+          >
+            {t("discount.apply")}
+          </button>
+        </div>
+      ))}
+
+      {!open ? (
+        <button type="button" className="link-btn add-discount" onClick={() => setOpen(true)}>
+          % {t("discount.add")}
+        </button>
+      ) : (
+        <form className="discount-form" onSubmit={submit}>
+          <div className="discount-row">
+            <div className="segmented">
+              <button type="button" className={mode === "percent" ? "on" : ""} onClick={() => setMode("percent")}>
+                %
+              </button>
+              <button type="button" className={mode === "amount" ? "on" : ""} onClick={() => setMode("amount")}>
+                {t("discount.amount")}
+              </button>
+            </div>
+            <input
+              type="number"
+              min="0.01"
+              max={mode === "percent" ? 100 : undefined}
+              step="0.01"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder={mode === "percent" ? "10" : "500"}
+              required
+              aria-label={mode === "percent" ? t("discount.percent") : t("discount.amount")}
+            />
+          </div>
+          {mode === "percent" && (
+            <>
+              <div className="quick">
+                {QUICK_PERCENTS.map((p) => (
+                  <button type="button" key={p} className={value === String(p) ? "on" : ""} onClick={() => setValue(String(p))}>
+                    {p}%
+                  </button>
+                ))}
+              </div>
+              <div className="segmented">
+                <button type="button" className={scope === "total" ? "on" : ""} onClick={() => setScope("total")}>
+                  {t("discount.scopeTotal")}
+                </button>
+                <button type="button" className={scope === "court" ? "on" : ""} onClick={() => setScope("court")}>
+                  {t("discount.scopeCourt")}
+                </button>
+              </div>
+            </>
+          )}
+          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={120} placeholder={t("discount.reason")} />
+          <div className="discount-actions">
+            <button type="button" className="btn btn-small" onClick={() => setOpen(false)}>
+              {t("common.close")}
+            </button>
+            <button className="btn btn-small btn-primary" disabled={busy || !value}>
+              {t("discount.apply")}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
   );
 }
 

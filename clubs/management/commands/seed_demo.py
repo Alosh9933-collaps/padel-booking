@@ -19,7 +19,7 @@ from bookings.billing import add_item, add_payment, totals
 from bookings.models import Booking, Payment
 from bookings.services import BookingError, create_booking, create_weekly, mark_no_show
 from buffet.models import Product
-from clubs.models import Club, Court, Membership, PriceRule
+from clubs.models import Club, Court, Customer, CustomerCategory, DiscountSettings, Membership, PriceRule
 
 CLUB_NAME = "Padel Arena (demo)"
 PASSWORD = "padel-demo-2026"
@@ -140,6 +140,15 @@ class Command(BaseCommand):
             customer_name="Tuesday group",
             customer_phone="+7 900 999-00-11",
         )
+
+        # Loyalty: first visit -25%, every 10th visit free, two categories.
+        DiscountSettings.objects.create(
+            club=club, first_visit_enabled=True, first_visit_percent=25, nth_visit_enabled=True, nth_visit_every=10, nth_visit_percent=100
+        )
+        regular = CustomerCategory.objects.create(club=club, name="Regular", color="#2f9a6a", discount_percent=10)
+        coach = CustomerCategory.objects.create(club=club, name="Coach", color="#7c4dcc", discount_percent=50)
+        Customer.objects.filter(club=club, name__in=["Ivan Petrov", "Ali Hassan", "Anna Kuznetsova"]).update(category=regular)
+        Customer.objects.filter(club=club, name="Omar Saleh").update(category=coach)
 
         self.stdout.write(self.style.SUCCESS(f"Demo club ready with {made} bookings."))
         self.stdout.write(f"Sign in as demo_owner, demo_manager or demo_desk with the password {PASSWORD}")

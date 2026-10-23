@@ -16,7 +16,15 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from bookings.availability import get_availability
-from bookings.billing import add_item, add_payment, set_item_quantity, with_totals
+from bookings.billing import (
+    add_item,
+    add_payment,
+    apply_manual_discount,
+    apply_offer,
+    remove_discount,
+    set_item_quantity,
+    with_totals,
+)
 from bookings.models import Booking
 from bookings.services import (
     calculate_price,
@@ -33,7 +41,7 @@ from bookings.services import (
 )
 from buffet.models import BookingItem
 from clubs.access import can_manage, clubs_of, managed_clubs_of
-from clubs.models import Club, Court, Membership, PriceRule
+from clubs.models import Club, Court, DiscountSettings, Membership, PriceRule
 
 from .serializers import (
     AvailabilitySerializer,
@@ -43,6 +51,8 @@ from .serializers import (
     BookingSerializer,
     ClubSerializer,
     CourtSerializer,
+    DiscountSerializer,
+    DiscountSettingsSerializer,
     ItemAddSerializer,
     ItemQuantitySerializer,
     OpenSessionStartSerializer,
@@ -208,6 +218,19 @@ class ClubViewSet(
         user = self.request.user
         role = Membership.objects.filter(club=OuterRef("pk"), user=user).values("role")[:1]
         return clubs_of(user).annotate(role=Subquery(role)).order_by("name")
+
+    @extend_schema(request=DiscountSettingsSerializer, responses=DiscountSettingsSerializer)
+    @action(detail=True, methods=["get", "patch"])
+    def discounts(self, request, pk=None):
+        """The club's loyalty rules. Everyone reads them; owners and managers change them."""
+        club = self.get_object()
+        rules, _ = DiscountSettings.objects.get_or_create(club=club)
+        if request.method == "GET":
+            return Response(DiscountSettingsSerializer(rules).data)
+        serializer = DiscountSettingsSerializer(rules, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class BookingViewSet(
@@ -420,6 +443,38 @@ class BookingViewSet(
         set_item_quantity(item, serializer.validated_data["quantity"])
         return self.bill(booking)
 
+    @extend_schema(
+        methods=["POST"],
+        request=DiscountSerializer,
+        responses=BookingBillSerializer,
+        description=(
+            "Apply the bill's one discount, replacing any earlier one. kind=first_visit, "
+            "nth_visit or category applies a loyalty offer the booking qualifies for (court "
+            "time only); kind=manual takes a percent (of 'court' or 'total') or an amount."
+        ),
+    )
+    @extend_schema(methods=["DELETE"], request=None, responses=BookingBillSerializer)
+    @action(detail=True, methods=["post", "delete"])
+    def discount(self, request, pk=None):
+        booking = self.get_object()
+        if request.method == "DELETE":
+            remove_discount(booking)
+            return self.bill(booking)
+        serializer = DiscountSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        if data["kind"] == "manual":
+            apply_manual_discount(
+                booking,
+                percent=data.get("percent"),
+                amount=data.get("amount"),
+                scope=data["scope"],
+                note=data["note"],
+            )
+        else:
+            apply_offer(booking, data["kind"])
+        return self.bill(booking)
+
     @extend_schema(request=PaymentAddSerializer, responses={201: BookingBillSerializer})
     @action(detail=True, methods=["post"])
     def payments(self, request, pk=None):
@@ -496,7 +551,7 @@ class RevenueReportView(APIView):
         line = F("unit_price") * F("quantity")
         zero = Decimal("0.00")
 
-        court_totals = bookings.aggregate(total=Sum("price"), count=Count("id"))
+        court_totals = bookings.aggregate(total=Sum("price"), count=Count("id"), discounts=Sum("discount"))
         buffet_total = items.aggregate(total=Sum(line))["total"] or zero
         by_court = (
             bookings.values("court_id", "court__name")
@@ -506,7 +561,7 @@ class RevenueReportView(APIView):
         by_day = (
             bookings.annotate(day=TruncDate("start_at", tzinfo=tz))
             .values("day")
-            .annotate(total=Sum("price"), count=Count("id"))
+            .annotate(total=Sum("price"), count=Count("id"), discounts=Sum("discount"))
             .order_by("day")
         )
         buffet_by_day = dict(
@@ -524,7 +579,8 @@ class RevenueReportView(APIView):
             "date_to": date_to,
             "total": court_totals["total"] or zero,
             "buffet_total": buffet_total,
-            "grand_total": (court_totals["total"] or zero) + buffet_total,
+            "discount_total": court_totals["discounts"] or zero,
+            "grand_total": (court_totals["total"] or zero) + buffet_total - (court_totals["discounts"] or zero),
             "bookings": court_totals["count"],
             "by_court": [
                 {
@@ -540,6 +596,7 @@ class RevenueReportView(APIView):
                     "date": row["day"],
                     "total": row["total"],
                     "buffet": buffet_by_day.get(row["day"], zero),
+                    "discounts": row["discounts"] or zero,
                     "bookings": row["count"],
                 }
                 for row in by_day

@@ -19,9 +19,10 @@ from bookings.billing import MONEY, ZERO, totals, with_totals
 from bookings.models import Booking, Payment
 from buffet.models import BookingItem, Product
 from clubs.access import can_manage, clubs_of, managed_clubs_of
-from clubs.models import Customer, Membership
+from clubs.models import Customer, CustomerCategory, Membership
 
 from .serializers import (
+    CustomerCategorySerializer,
     CustomerSerializer,
     DailyReportSerializer,
     ProductSerializer,
@@ -78,11 +79,16 @@ class CustomerViewSet(
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return Customer.objects.none()
-        qs = Customer.objects.filter(club__in=clubs_of(self.request.user))
+        qs = Customer.objects.filter(club__in=clubs_of(self.request.user)).select_related("category")
         if self.action == "list":
             club = _club_param(self.request)
             if club:
                 qs = qs.filter(club_id=club)
+            category = self.request.query_params.get("category", "")
+            if category == "none":
+                qs = qs.filter(category__isnull=True)
+            elif category.isdigit():
+                qs = qs.filter(category_id=int(category))
             search = self.request.query_params.get("search", "").strip()
             if search:
                 digits = "".join(ch for ch in search if ch.isdigit())
@@ -110,6 +116,7 @@ class CustomerViewSet(
         parameters=[
             OpenApiParameter("club", int),
             OpenApiParameter("search", str, description="Part of the name, or 3+ digits of the phone"),
+            OpenApiParameter("category", str, description="A category id, or 'none'"),
         ]
     )
     def list(self, request, *args, **kwargs):
@@ -246,8 +253,30 @@ class DailyReportView(APIView):
                 {"name": r["name"], "quantity": r["qty"], "total": f"{r['total']:.2f}"} for r in buffet
             ],
             "buffet_total": sum((Decimal(r["total"]) for r in buffet), ZERO),
+            "discount_total": bookings.filter(status=Booking.Status.CONFIRMED).aggregate(s=Sum("discount"))["s"] or ZERO,
             "bookings": bookings.count(),
             "unpaid": unpaid,
             "unpaid_total": sum((totals(b)["balance"] for b in unpaid), ZERO),
         }
         return Response(DailyReportSerializer(report).data)
+
+
+class CustomerCategoryViewSet(ManagedByClubMixin, viewsets.ModelViewSet):
+    """Labels for customers (Regular, VIP, Coach...). Staff read them; owners and managers edit."""
+
+    serializer_class = CustomerCategorySerializer
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return CustomerCategory.objects.none()
+        qs = CustomerCategory.objects.filter(club__in=clubs_of(self.request.user)).annotate(
+            customers_count=Count("customers")
+        )
+        club = _club_param(self.request)
+        if club and self.action == "list":
+            qs = qs.filter(club_id=club)
+        return qs.order_by("name")
+
+    @extend_schema(parameters=[OpenApiParameter("club", int)])
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)

@@ -4,10 +4,20 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from bookings.billing import totals
+from bookings.discounts import offers
 from bookings.models import Booking, Payment
 from buffet.models import BookingItem, Product
 from clubs.access import clubs_of
-from clubs.models import Club, Court, Customer, Membership, PriceRule, normalize_phone
+from clubs.models import (
+    Club,
+    Court,
+    Customer,
+    CustomerCategory,
+    DiscountSettings,
+    Membership,
+    PriceRule,
+    normalize_phone,
+)
 
 
 def _user_from(serializer):
@@ -195,6 +205,12 @@ BOOKING_FIELDS = (
     "status",
     "is_open",
     "series",
+    "discount_kind",
+    "discount_percent",
+    "discount_fixed",
+    "discount_scope",
+    "discount_note",
+    "discount",
     "created_at",
     "cancelled_at",
     "court_total",
@@ -233,15 +249,38 @@ class PaymentSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "created_at", "created_by_name")
 
 
+class OfferSerializer(serializers.Serializer):
+    kind = serializers.ChoiceField(choices=["first_visit", "nth_visit", "category"])
+    percent = serializers.IntegerField()
+    amount = serializers.DecimalField(**MONEY)
+    visit = serializers.IntegerField(allow_null=True)
+    note = serializers.CharField(allow_blank=True)
+
+
 class BookingBillSerializer(BookingSerializer):
-    """A booking with its full bill: buffet items and payments."""
+    """A booking with its full bill: buffet items, payments and the loyalty offers it qualifies for."""
 
     items = BookingItemSerializer(many=True, read_only=True)
     payments = PaymentSerializer(many=True, read_only=True)
+    offers = serializers.SerializerMethodField()
 
     class Meta(BookingSerializer.Meta):
-        fields = BOOKING_FIELDS + ("items", "payments")
+        fields = BOOKING_FIELDS + ("items", "payments", "offers")
         read_only_fields = fields
+
+    @extend_schema_field(OfferSerializer(many=True))
+    def get_offers(self, booking):
+        return OfferSerializer(offers(booking), many=True).data
+
+
+class DiscountSerializer(serializers.Serializer):
+    """Apply a loyalty offer (kind + nothing else) or a manual discount (percent or amount)."""
+
+    kind = serializers.ChoiceField(choices=["first_visit", "nth_visit", "category", "manual"])
+    percent = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, allow_null=True)
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
+    scope = serializers.ChoiceField(choices=["court", "total"], default="total")
+    note = serializers.CharField(max_length=120, required=False, allow_blank=True, default="")
 
 
 class BookingCreateSerializer(serializers.Serializer):
@@ -327,6 +366,7 @@ class RevenueByDaySerializer(serializers.Serializer):
     date = serializers.DateField()
     total = serializers.DecimalField(max_digits=12, decimal_places=2)
     buffet = serializers.DecimalField(max_digits=12, decimal_places=2)
+    discounts = serializers.DecimalField(max_digits=12, decimal_places=2)
     bookings = serializers.IntegerField()
 
 
@@ -338,7 +378,10 @@ class RevenueReportSerializer(serializers.Serializer):
     date_to = serializers.DateField()
     total = serializers.DecimalField(max_digits=12, decimal_places=2, help_text="Court time")
     buffet_total = serializers.DecimalField(max_digits=12, decimal_places=2)
-    grand_total = serializers.DecimalField(max_digits=12, decimal_places=2)
+    discount_total = serializers.DecimalField(max_digits=12, decimal_places=2)
+    grand_total = serializers.DecimalField(
+        max_digits=12, decimal_places=2, help_text="Court time + buffet - discounts"
+    )
     bookings = serializers.IntegerField()
     by_court = RevenueByCourtSerializer(many=True)
     by_day = RevenueByDaySerializer(many=True)
@@ -366,7 +409,45 @@ class ProductSerializer(serializers.ModelSerializer):
         return price
 
 
+class CustomerCategorySerializer(serializers.ModelSerializer):
+    customers = serializers.IntegerField(source="customers_count", read_only=True, default=0)
+
+    class Meta:
+        model = CustomerCategory
+        fields = ("id", "club", "name", "color", "discount_percent", "customers")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        user = _user_from(self)
+        if user is not None:
+            self.fields["club"].queryset = clubs_of(user)
+
+    def validate_club(self, club):
+        if self.instance is not None and club != self.instance.club:
+            raise serializers.ValidationError("A category cannot move to another club.")
+        return club
+
+    def validate_color(self, color):
+        if len(color) != 7 or not color.startswith("#"):
+            raise serializers.ValidationError("Use a colour like #1d6fd1.")
+        return color
+
+
+class DiscountSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DiscountSettings
+        fields = (
+            "first_visit_enabled",
+            "first_visit_percent",
+            "nth_visit_enabled",
+            "nth_visit_every",
+            "nth_visit_percent",
+        )
+
+
 class CustomerSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source="category.name", read_only=True, default=None)
+    category_color = serializers.CharField(source="category.color", read_only=True, default=None)
     visits = serializers.IntegerField(read_only=True, default=0)
     no_shows = serializers.IntegerField(read_only=True, default=0)
     spent = serializers.DecimalField(read_only=True, default=0, **MONEY)
@@ -379,6 +460,9 @@ class CustomerSerializer(serializers.ModelSerializer):
             "club",
             "name",
             "phone",
+            "category",
+            "category_name",
+            "category_color",
             "notes",
             "created_at",
             "visits",
@@ -393,6 +477,7 @@ class CustomerSerializer(serializers.ModelSerializer):
         user = _user_from(self)
         if user is not None:
             self.fields["club"].queryset = clubs_of(user)
+            self.fields["category"].queryset = CustomerCategory.objects.filter(club__in=clubs_of(user))
 
     def validate_club(self, club):
         if self.instance is not None and club != self.instance.club:
@@ -401,6 +486,9 @@ class CustomerSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         club = attrs.get("club") or getattr(self.instance, "club", None)
+        category = attrs.get("category")
+        if category is not None and category.club_id != club.pk:
+            raise serializers.ValidationError({"category": "This category belongs to another club."})
         phone = normalize_phone(attrs.get("phone", getattr(self.instance, "phone", "")))
         if phone:
             clash = Customer.objects.filter(club=club, phone=phone)
@@ -454,6 +542,7 @@ class DailyReportSerializer(serializers.Serializer):
     by_method = serializers.ListField(child=serializers.DictField())
     buffet = serializers.ListField(child=serializers.DictField())
     buffet_total = serializers.DecimalField(**MONEY)
+    discount_total = serializers.DecimalField(**MONEY)
     bookings = serializers.IntegerField()
     unpaid = BookingSerializer(many=True)
     unpaid_total = serializers.DecimalField(**MONEY)

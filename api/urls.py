@@ -2,7 +2,13 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
-from .operations import CustomerViewSet, DailyReportView, ProductViewSet, StaffViewSet
+from .operations import (
+    CustomerCategoryViewSet,
+    CustomerViewSet,
+    DailyReportView,
+    ProductViewSet,
+    StaffViewSet,
+)
 from .views import (
     BookingViewSet,
     ClubViewSet,
@@ -18,6 +24,7 @@ router.register("price-rules", PriceRuleViewSet, basename="pricerule")
 router.register("bookings", BookingViewSet, basename="booking")
 router.register("products", ProductViewSet, basename="product")
 router.register("customers", CustomerViewSet, basename="customer")
+router.register("customer-categories", CustomerCategoryViewSet, basename="customercategory")
 router.register("staff", StaffViewSet, basename="staff")
 
 urlpatterns = [

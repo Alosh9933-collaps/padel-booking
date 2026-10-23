@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
-from django.core.validators import MaxValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import F, Q
  
@@ -140,12 +140,57 @@ def normalize_phone(raw):
     return f"+{digits}" if raw.startswith("+") and digits else digits
 
 
+PERCENT = [MinValueValidator(0), MaxValueValidator(100)]
+
+
+class CustomerCategory(models.Model):
+    """A label the club gives its players (Regular, VIP, Coach...), optionally with a discount."""
+
+    club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="customer_categories")
+    name = models.CharField(max_length=40)
+    color = models.CharField(max_length=7, default="#1d6fd1", help_text="Hex colour, e.g. #1d6fd1")
+    # Suggested on court time for customers in this category; 0 means no discount.
+    discount_percent = models.PositiveSmallIntegerField(default=0, validators=PERCENT)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["club", "name"], name="uniq_category_name_per_club"),
+            models.CheckConstraint(condition=Q(discount_percent__lte=100), name="category_percent_max_100"),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class DiscountSettings(models.Model):
+    """The club's loyalty rules. Each rule is off until a manager turns it on.
+
+    A rule never applies itself: when a booking qualifies, staff see the offer
+    on the bill and apply it with one click.
+    """
+
+    club = models.OneToOneField(Club, on_delete=models.CASCADE, related_name="discount_settings")
+    first_visit_enabled = models.BooleanField(default=False)
+    first_visit_percent = models.PositiveSmallIntegerField(default=25, validators=PERCENT)
+    nth_visit_enabled = models.BooleanField(default=False)
+    nth_visit_every = models.PositiveSmallIntegerField(
+        default=10, validators=[MinValueValidator(2), MaxValueValidator(100)]
+    )
+    nth_visit_percent = models.PositiveSmallIntegerField(default=100, validators=PERCENT)
+
+    def __str__(self):
+        return f"Discount rules of {self.club}"
+
+
 class Customer(models.Model):
     """A player of one club, recognised by phone number."""
 
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="customers")
     name = models.CharField(max_length=120)
     phone = models.CharField(max_length=32, blank=True)
+    category = models.ForeignKey(
+        CustomerCategory, null=True, blank=True, on_delete=models.SET_NULL, related_name="customers"
+    )
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

@@ -125,6 +125,9 @@ export default function Daily() {
                 </table>
               )}
               <p className="hint">{t("daily.bookingsCount", { count: report.bookings })}</p>
+              {Number(report.discount_total) > 0 && (
+                <p className="hint">{t("daily.discounts", { amount: money(report.discount_total, report.currency) })}</p>
+              )}
             </section>
           </div>
         </div>

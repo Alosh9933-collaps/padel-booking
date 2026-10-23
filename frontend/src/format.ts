@@ -100,6 +100,11 @@ export function ltr(text: string): string {
   return `⁦${text}⁩`;
 }
 
+/** A minus amount ("−₽500", "−10%") that keeps its sign in front in right-to-left text. */
+export function minus(text: string): string {
+  return ltr(`−${text}`);
+}
+
 /** "HH:MM–HH:MM" in the club's timezone, safe in right-to-left text. */
 export function timeRange(startIso: string, endIso: string, timeZone: string): string {
   return ltr(`${clockTime(startIso, timeZone)}–${clockTime(endIso, timeZone)}`);

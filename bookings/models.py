@@ -34,6 +34,29 @@ class Booking(models.Model):
     is_open = models.BooleanField(default=False)
     # Bookings made together as a weekly series share this id.
     series = models.UUIDField(null=True, blank=True, db_index=True)
+
+    # One discount per bill. Either a percent of a scope or a fixed amount off
+    # the whole bill; `discount` holds the resulting money and is recalculated
+    # whenever the bill changes (see bookings.discounts).
+    class DiscountKind(models.TextChoices):
+        NONE = "", "None"
+        FIRST_VISIT = "first_visit", "First visit"
+        NTH_VISIT = "nth_visit", "Loyalty visit"
+        CATEGORY = "category", "Customer category"
+        MANUAL = "manual", "Manual"
+
+    class DiscountScope(models.TextChoices):
+        COURT = "court", "Court time"
+        TOTAL = "total", "Whole bill"
+
+    discount_kind = models.CharField(max_length=12, choices=DiscountKind.choices, default="", blank=True)
+    discount_percent = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    discount_fixed = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    discount_scope = models.CharField(
+        max_length=5, choices=DiscountScope.choices, default=DiscountScope.COURT
+    )
+    discount_note = models.CharField(max_length=120, blank=True)
+    discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )

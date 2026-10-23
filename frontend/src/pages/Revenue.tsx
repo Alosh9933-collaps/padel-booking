@@ -1,12 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { Api, type RevenueReport } from "../api";
-import { addDays, compactNumber, daysBetween, money, shortDate, todayIn } from "../format";
+import { addDays, compactNumber, daysBetween, minus, money, shortDate, todayIn } from "../format";
 import { errorText, useT } from "../i18n";
 import { useClub } from "../session";
 
 type Range = { from: string; to: string };
-type Day = { date: string; court: number; buffet: number; bookings: number };
+type Day = { date: string; court: number; buffet: number; discounts: number; bookings: number };
 
 function presets(today: string): [string, Range][] {
   const monthStart = `${today.slice(0, 8)}01`;
@@ -59,6 +59,7 @@ export default function Revenue() {
         date,
         court: row ? Number(row.total) : 0,
         buffet: row ? Number(row.buffet) : 0,
+        discounts: row ? Number(row.discounts) : 0,
         bookings: row?.bookings ?? 0,
       };
     });
@@ -133,6 +134,13 @@ export default function Revenue() {
               <span className="stat-sub">{grand ? Math.round((Number(report.buffet_total) / grand) * 100) : 0}%</span>
             </div>
             <div className="stat">
+              <span className="stat-label">{t("revenue.discounts")}</span>
+              <strong className="stat-value">
+                {Number(report.discount_total) > 0 ? minus(money(report.discount_total, report.currency)) : money(0, report.currency)}
+              </strong>
+              <span className="stat-sub">{t("revenue.discountsHint")}</span>
+            </div>
+            <div className="stat">
               <span className="stat-label">{t("revenue.bestDay")}</span>
               <strong className="stat-value">{best ? shortDate(best.date) : "—"}</strong>
               {best && <span className="stat-sub">{money(best.court + best.buffet, report.currency)}</span>}
@@ -161,6 +169,7 @@ export default function Revenue() {
                       <th className="num">{t("revenue.bookings")}</th>
                       <th className="num">{t("revenue.courts")}</th>
                       <th className="num">{t("revenue.buffet")}</th>
+                      <th className="num">{t("revenue.discounts")}</th>
                       <th className="num">{t("revenue.total")}</th>
                     </tr>
                   </thead>
@@ -171,7 +180,8 @@ export default function Revenue() {
                         <td className="num">{d.bookings}</td>
                         <td className="num">{money(d.court, report.currency)}</td>
                         <td className="num">{money(d.buffet, report.currency)}</td>
-                        <td className="num strong">{money(d.court + d.buffet, report.currency)}</td>
+                        <td className="num">{d.discounts ? minus(money(d.discounts, report.currency)) : "—"}</td>
+                        <td className="num strong">{money(d.court + d.buffet - d.discounts, report.currency)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -313,13 +323,18 @@ function DayChart({ days, currency }: { days: Day[]; currency: string }) {
             top: Math.max(y(hovered.court + hovered.buffet) - 12, 8),
           }}
         >
-          <strong>{money(hovered.court + hovered.buffet, currency)}</strong>
+          <strong>{money(hovered.court + hovered.buffet - hovered.discounts, currency)}</strong>
           <span className="tip-row">
             <i className="tip-key tip-court" /> {t("revenue.courts")} {money(hovered.court, currency)}
           </span>
           <span className="tip-row">
             <i className="tip-key tip-buffet" /> {t("revenue.buffet")} {money(hovered.buffet, currency)}
           </span>
+          {hovered.discounts > 0 && (
+            <span className="tip-row">
+              {t("revenue.discounts")} {minus(money(hovered.discounts, currency))}
+            </span>
+          )}
           <span>
             {shortDate(hovered.date)} · {t("revenue.bookingsCount", { count: hovered.bookings })}
           </span>
