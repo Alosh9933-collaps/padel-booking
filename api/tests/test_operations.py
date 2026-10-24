@@ -250,7 +250,8 @@ class ReportTests(OperationsTestBase):
         self.assertEqual(response.status_code, 200)
         data = response.data
         self.assertEqual(Decimal(data["received"]), Decimal("1500.00"))
-        self.assertEqual({m["method"] for m in data["by_method"]}, {"cash", "card"})
+        totals = {m["method"]: Decimal(m["total"]) for m in data["by_method"]}
+        self.assertEqual(totals, {"cash": Decimal("1000"), "card": Decimal("500"), "transfer": Decimal("0")})
         self.assertEqual(data["buffet"][0]["name"], "Water")
         self.assertEqual(Decimal(data["unpaid_total"]), Decimal("700.00"))
 

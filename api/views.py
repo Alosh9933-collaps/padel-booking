@@ -19,10 +19,12 @@ from bookings.availability import get_availability
 from bookings.billing import (
     add_item,
     add_payment,
+    add_refund,
     apply_manual_discount,
     apply_offer,
     remove_discount,
     set_item_quantity,
+    totals,
     with_totals,
 )
 from bookings.models import Booking
@@ -39,7 +41,8 @@ from bookings.services import (
     stop_open_session,
     validate_window,
 )
-from buffet.models import BookingItem
+from buffet.models import BookingItem, Sale
+from cashdesk.services import record
 from clubs.access import can_manage, clubs_of, managed_clubs_of
 from clubs.models import Club, Court, DiscountSettings, Membership, PriceRule
 
@@ -57,6 +60,7 @@ from .serializers import (
     ItemQuantitySerializer,
     OpenSessionStartSerializer,
     PaymentAddSerializer,
+    RefundAddSerializer,
     PriceRuleSerializer,
     QuoteSerializer,
     RevenueReportSerializer,
@@ -279,6 +283,20 @@ class BookingViewSet(
                 qs = qs.filter(status=params["status"])
         return qs.order_by("start_at")
 
+    def log(self, booking, action, amount=None, **data):
+        """One line in the club's activity log, about this booking."""
+        record(
+            booking.court.club,
+            self.request.user,
+            action,
+            booking=booking,
+            amount=amount,
+            customer=booking.customer_name,
+            court=booking.court.name,
+            start=booking.start_at.isoformat(),
+            **data,
+        )
+
     def bill(self, booking, status_code=status.HTTP_200_OK):
         """The booking re-read with fresh totals, items and payments."""
         fresh = (
@@ -317,6 +335,7 @@ class BookingViewSet(
             customer_phone=data["customer_phone"],
             created_by=request.user,
         )
+        self.log(booking, "booking.created", booking.price, end=booking.end_at.isoformat())
         return self.bill(booking, status.HTTP_201_CREATED)
 
     @extend_schema(
@@ -331,13 +350,28 @@ class BookingViewSet(
         booking = self.get_object()
         serializer = BookingChangeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        before = (booking.start_at, booking.end_at, booking.price, booking.customer_name)
         change_booking(booking, **serializer.validated_data)
+        if (booking.start_at, booking.end_at) != before[:2]:
+            self.log(
+                booking,
+                "booking.changed",
+                booking.price,
+                old_start=before[0].isoformat(),
+                old_end=before[1].isoformat(),
+                end=booking.end_at.isoformat(),
+                old_price=before[2],
+            )
+        elif booking.customer_name != before[3]:
+            self.log(booking, "booking.renamed", old_customer=before[3])
         return self.bill(booking)
 
     @extend_schema(request=None, responses=BookingBillSerializer)
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
-        return self.bill(cancel_booking(self.get_object()))
+        booking = cancel_booking(self.get_object())
+        self.log(booking, "booking.cancelled", totals(booking)["paid_total"])
+        return self.bill(booking)
 
     @extend_schema(
         request=None,
@@ -346,14 +380,18 @@ class BookingViewSet(
     )
     @action(detail=True, methods=["post"], url_path="cancel-following")
     def cancel_following(self, request, pk=None):
-        cancelled = cancel_following(self.get_object())
+        booking = self.get_object()
+        cancelled = cancel_following(booking)
+        self.log(booking, "booking.cancelled_series", count=len(cancelled))
         return Response(BookingSerializer(cancelled, many=True).data)
 
     @extend_schema(request=None, responses=BookingBillSerializer)
     @action(detail=True, methods=["post"], url_path="no-show")
     def no_show(self, request, pk=None):
         """The customer never came: the booking stays on record and the court is freed."""
-        return self.bill(mark_no_show(self.get_object()))
+        booking = mark_no_show(self.get_object())
+        self.log(booking, "booking.no_show")
+        return self.bill(booking)
 
     @extend_schema(
         request=OpenSessionStartSerializer,
@@ -374,13 +412,16 @@ class BookingViewSet(
             customer_phone=data["customer_phone"],
             created_by=request.user,
         )
+        self.log(booking, "open_play.started")
         return self.bill(booking, status.HTTP_201_CREATED)
 
     @extend_schema(request=None, responses=BookingBillSerializer)
     @action(detail=True, methods=["post"])
     def stop(self, request, pk=None):
         """End open play now and charge the exact minutes played."""
-        return self.bill(stop_open_session(self.get_object()))
+        booking = stop_open_session(self.get_object())
+        self.log(booking, "open_play.stopped", booking.price, end=booking.end_at.isoformat())
+        return self.bill(booking)
 
     @extend_schema(
         request=WeeklyBookingSerializer,
@@ -412,6 +453,8 @@ class BookingViewSet(
         )
         for entry in skipped:
             entry.update(price=None, ok=False)
+        if created:
+            self.log(created[0], "booking.weekly", booked=len(created), weeks=data["weeks"])
         return Response(
             WeeklyResultSerializer({"created": created, "skipped": skipped}).data,
             status=status.HTTP_201_CREATED,
@@ -424,12 +467,9 @@ class BookingViewSet(
         booking = self.get_object()
         serializer = ItemAddSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        add_item(
-            booking,
-            serializer.validated_data["product"],
-            serializer.validated_data["quantity"],
-            created_by=request.user,
-        )
+        product, quantity = serializer.validated_data["product"], serializer.validated_data["quantity"]
+        add_item(booking, product, quantity, created_by=request.user)
+        self.log(booking, "item.added", product.price * quantity, name=product.name, quantity=quantity)
         return self.bill(booking, status.HTTP_201_CREATED)
 
     @extend_schema(request=ItemQuantitySerializer, responses=BookingBillSerializer)
@@ -440,7 +480,10 @@ class BookingViewSet(
         item = get_object_or_404(booking.items, pk=item_id)
         serializer = ItemQuantitySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        set_item_quantity(item, serializer.validated_data["quantity"])
+        old = item.quantity
+        new = serializer.validated_data["quantity"]
+        set_item_quantity(item, new)
+        self.log(booking, "item.changed", name=item.name, old_quantity=old, quantity=new)
         return self.bill(booking)
 
     @extend_schema(
@@ -458,7 +501,9 @@ class BookingViewSet(
     def discount(self, request, pk=None):
         booking = self.get_object()
         if request.method == "DELETE":
+            old = (booking.discount_kind, booking.discount)
             remove_discount(booking)
+            self.log(booking, "discount.removed", old[1], kind=old[0])
             return self.bill(booking)
         serializer = DiscountSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -473,6 +518,16 @@ class BookingViewSet(
             )
         else:
             apply_offer(booking, data["kind"])
+        self.log(
+            booking,
+            "discount.applied",
+            booking.discount,
+            kind=booking.discount_kind,
+            percent=booking.discount_percent,
+            fixed=booking.discount_fixed,
+            scope=booking.discount_scope,
+            note=booking.discount_note,
+        )
         return self.bill(booking)
 
     @extend_schema(request=PaymentAddSerializer, responses={201: BookingBillSerializer})
@@ -482,7 +537,19 @@ class BookingViewSet(
         booking = self.get_object()
         serializer = PaymentAddSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        add_payment(booking, created_by=request.user, **serializer.validated_data)
+        payment = add_payment(booking, created_by=request.user, **serializer.validated_data)
+        self.log(booking, "payment.added", payment.amount, method=payment.method, payer=payment.payer_name)
+        return self.bill(booking, status.HTTP_201_CREATED)
+
+    @extend_schema(request=RefundAddSerializer, responses={201: BookingBillSerializer})
+    @action(detail=True, methods=["post"])
+    def refunds(self, request, pk=None):
+        """Give money back: after a cancellation, or when a discount left the bill overpaid."""
+        booking = self.get_object()
+        serializer = RefundAddSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        refund = add_refund(booking, created_by=request.user, **serializer.validated_data)
+        self.log(booking, "refund.added", refund.amount, method=refund.method, reason=refund.reason)
         return self.bill(booking, status.HTTP_201_CREATED)
 
     @extend_schema(request=None, responses=BookingBillSerializer)
@@ -492,7 +559,9 @@ class BookingViewSet(
         booking = self.get_object()
         if not can_manage(request.user, booking.court.club):
             raise PermissionDenied(MANAGERS_ONLY)
-        get_object_or_404(booking.payments, pk=payment_id).delete()
+        payment = get_object_or_404(booking.payments, pk=payment_id)
+        payment.delete()
+        self.log(booking, "payment.removed", payment.amount, method=payment.method)
         return self.bill(booking)
 
 
@@ -570,6 +639,14 @@ class RevenueReportView(APIView):
             .annotate(total=Sum(line))
             .values_list("day", "total")
         )
+        # Counter sales count as buffet on the day they were made.
+        sales = Sale.objects.filter(club=club, voided_at__isnull=True, created_at__gte=start, created_at__lt=end)
+        for day, total in (
+            sales.annotate(day=TruncDate("created_at", tzinfo=tz)).values("day").annotate(t=Sum("total")).values_list("day", "t")
+        ):
+            buffet_by_day[day] = buffet_by_day.get(day, zero) + total
+        buffet_total += sales.aggregate(s=Sum("total"))["s"] or zero
+        court_by_day = {row["day"]: row for row in by_day}
 
         report = {
             "club": club.pk,
@@ -593,13 +670,13 @@ class RevenueReportView(APIView):
             ],
             "by_day": [
                 {
-                    "date": row["day"],
-                    "total": row["total"],
-                    "buffet": buffet_by_day.get(row["day"], zero),
-                    "discounts": row["discounts"] or zero,
-                    "bookings": row["count"],
+                    "date": day,
+                    "total": court_by_day.get(day, {}).get("total") or zero,
+                    "buffet": buffet_by_day.get(day, zero),
+                    "discounts": court_by_day.get(day, {}).get("discounts") or zero,
+                    "bookings": court_by_day.get(day, {}).get("count") or 0,
                 }
-                for row in by_day
+                for day in sorted(set(court_by_day) | set(buffet_by_day))
             ],
         }
         return Response(RevenueReportSerializer(report).data)

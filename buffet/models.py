@@ -54,3 +54,47 @@ class BookingItem(models.Model):
 
     def __str__(self):
         return f"{self.quantity} x {self.name}"
+
+
+class Sale(models.Model):
+    """A buffet sale paid at the counter, without a court booking."""
+
+    club = models.ForeignKey("clubs.Club", on_delete=models.CASCADE, related_name="sales")
+    customer = models.ForeignKey(
+        "clubs.Customer", null=True, blank=True, on_delete=models.SET_NULL, related_name="sales"
+    )
+    customer_name = models.CharField(max_length=120, blank=True)
+    method = models.CharField(max_length=10, choices=[("cash", "Cash"), ("card", "Card"), ("transfer", "Transfer")])
+    total = models.DecimalField(max_digits=10, decimal_places=2)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    # A voided sale gave the money back; it stays on record but counts for nothing.
+    voided_at = models.DateTimeField(null=True, blank=True)
+    voided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    void_reason = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["club", "-created_at"], name="sale_club_time_idx")]
+
+    def __str__(self):
+        return f"Sale {self.pk}: {self.total}"
+
+
+class SaleItem(models.Model):
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name="items")
+    product = models.ForeignKey(Product, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    name = models.CharField(max_length=80)
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity = models.PositiveSmallIntegerField(default=1, validators=[MinValueValidator(1)])
+
+    @property
+    def total(self):
+        return self.unit_price * self.quantity
+
+    def __str__(self):
+        return f"{self.quantity} x {self.name}"
+

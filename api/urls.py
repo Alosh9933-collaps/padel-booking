@@ -3,10 +3,13 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from .operations import (
+    ActivityViewSet,
     CustomerCategoryViewSet,
     CustomerViewSet,
     DailyReportView,
     ProductViewSet,
+    SaleViewSet,
+    ShiftViewSet,
     StaffViewSet,
 )
 from .views import (
@@ -26,6 +29,9 @@ router.register("products", ProductViewSet, basename="product")
 router.register("customers", CustomerViewSet, basename="customer")
 router.register("customer-categories", CustomerCategoryViewSet, basename="customercategory")
 router.register("staff", StaffViewSet, basename="staff")
+router.register("sales", SaleViewSet, basename="sale")
+router.register("shifts", ShiftViewSet, basename="shift")
+router.register("activity", ActivityViewSet, basename="activity")
 
 urlpatterns = [
     path("auth/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),

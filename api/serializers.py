@@ -5,8 +5,9 @@ from rest_framework import serializers
 
 from bookings.billing import totals
 from bookings.discounts import offers
-from bookings.models import Booking, Payment
-from buffet.models import BookingItem, Product
+from bookings.models import Booking, Payment, Refund
+from buffet.models import BookingItem, Product, Sale, SaleItem
+from cashdesk.models import Activity, Shift
 from clubs.access import clubs_of
 from clubs.models import (
     Club,
@@ -158,6 +159,8 @@ class BillTotalsMixin(serializers.Serializer):
     items_total = serializers.SerializerMethodField()
     total = serializers.SerializerMethodField()
     paid_total = serializers.SerializerMethodField()
+    refunded_total = serializers.SerializerMethodField()
+    refundable = serializers.SerializerMethodField()
     balance = serializers.SerializerMethodField()
     payment_status = serializers.SerializerMethodField()
 
@@ -182,6 +185,14 @@ class BillTotalsMixin(serializers.Serializer):
     @extend_schema_field(serializers.DecimalField(**MONEY))
     def get_paid_total(self, b):
         return f"{self._totals(b)['paid_total']:.2f}"
+
+    @extend_schema_field(serializers.DecimalField(**MONEY))
+    def get_refunded_total(self, b):
+        return f"{self._totals(b)['refunded_total']:.2f}"
+
+    @extend_schema_field(serializers.DecimalField(**MONEY))
+    def get_refundable(self, b):
+        return f"{self._totals(b)['refundable']:.2f}"
 
     @extend_schema_field(serializers.DecimalField(**MONEY))
     def get_balance(self, b):
@@ -217,6 +228,8 @@ BOOKING_FIELDS = (
     "items_total",
     "total",
     "paid_total",
+    "refunded_total",
+    "refundable",
     "balance",
     "payment_status",
 )
@@ -249,6 +262,21 @@ class PaymentSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "created_at", "created_by_name")
 
 
+class RefundSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(source="created_by.username", read_only=True, default="")
+
+    class Meta:
+        model = Refund
+        fields = ("id", "amount", "method", "reason", "created_at", "created_by_name")
+        read_only_fields = fields
+
+
+class RefundAddSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Refund
+        fields = ("amount", "method", "reason")
+
+
 class OfferSerializer(serializers.Serializer):
     kind = serializers.ChoiceField(choices=["first_visit", "nth_visit", "category"])
     percent = serializers.IntegerField()
@@ -262,11 +290,16 @@ class BookingBillSerializer(BookingSerializer):
 
     items = BookingItemSerializer(many=True, read_only=True)
     payments = PaymentSerializer(many=True, read_only=True)
+    refunds = serializers.SerializerMethodField()
     offers = serializers.SerializerMethodField()
 
     class Meta(BookingSerializer.Meta):
-        fields = BOOKING_FIELDS + ("items", "payments", "offers")
+        fields = BOOKING_FIELDS + ("items", "payments", "refunds", "offers")
         read_only_fields = fields
+
+    @extend_schema_field(RefundSerializer(many=True))
+    def get_refunds(self, booking):
+        return RefundSerializer(booking.refunds.all(), many=True).data
 
     @extend_schema_field(OfferSerializer(many=True))
     def get_offers(self, booking):
@@ -534,11 +567,154 @@ class StaffCreateSerializer(serializers.Serializer):
             self.fields["club"].queryset = clubs_of(user)
 
 
+class SaleItemSerializer(serializers.ModelSerializer):
+    total = serializers.DecimalField(read_only=True, **MONEY)
+
+    class Meta:
+        model = SaleItem
+        fields = ("id", "product", "name", "unit_price", "quantity", "total")
+        read_only_fields = fields
+
+
+class SaleSerializer(serializers.ModelSerializer):
+    items = SaleItemSerializer(many=True, read_only=True)
+    created_by_name = serializers.CharField(source="created_by.username", read_only=True, default="")
+    voided_by_name = serializers.CharField(source="voided_by.username", read_only=True, default="")
+
+    class Meta:
+        model = Sale
+        fields = (
+            "id",
+            "club",
+            "customer",
+            "customer_name",
+            "method",
+            "total",
+            "items",
+            "created_at",
+            "created_by_name",
+            "voided_at",
+            "voided_by_name",
+            "void_reason",
+        )
+        read_only_fields = fields
+
+
+class SaleLineSerializer(serializers.Serializer):
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
+    quantity = serializers.IntegerField(min_value=1, max_value=99)
+
+
+class SaleCreateSerializer(serializers.Serializer):
+    club = serializers.PrimaryKeyRelatedField(queryset=Club.objects.none())
+    items = SaleLineSerializer(many=True)
+    method = serializers.ChoiceField(choices=Payment.Method.choices)
+    customer_name = serializers.CharField(max_length=120, required=False, allow_blank=True, default="")
+    customer_phone = serializers.CharField(max_length=32, required=False, allow_blank=True, default="")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        user = _user_from(self)
+        if user is not None:
+            self.fields["club"].queryset = clubs_of(user)
+
+
+class VoidSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=200, required=False, allow_blank=True, default="")
+
+
+class ShiftSerializer(serializers.ModelSerializer):
+    opened_by_name = serializers.CharField(source="opened_by.username", read_only=True, default="")
+    closed_by_name = serializers.CharField(source="closed_by.username", read_only=True, default="")
+    cash_bookings = serializers.SerializerMethodField()
+    cash_sales = serializers.SerializerMethodField()
+    cash_refunds = serializers.SerializerMethodField()
+    expected = serializers.SerializerMethodField()
+    difference = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Shift
+        fields = (
+            "id",
+            "club",
+            "opened_at",
+            "opened_by_name",
+            "opening_cash",
+            "closed_at",
+            "closed_by_name",
+            "counted_cash",
+            "note",
+            "cash_bookings",
+            "cash_sales",
+            "cash_refunds",
+            "expected",
+            "difference",
+        )
+        read_only_fields = fields
+
+    def _summary(self, shift):
+        from cashdesk.services import shift_summary
+
+        cache = self.context.setdefault("_shift", {})
+        if shift.pk not in cache:
+            cache[shift.pk] = shift_summary(shift)
+        return cache[shift.pk]
+
+    @extend_schema_field(serializers.DecimalField(**MONEY))
+    def get_cash_bookings(self, shift):
+        return f"{self._summary(shift)['cash_bookings']:.2f}"
+
+    @extend_schema_field(serializers.DecimalField(**MONEY))
+    def get_cash_sales(self, shift):
+        return f"{self._summary(shift)['cash_sales']:.2f}"
+
+    @extend_schema_field(serializers.DecimalField(**MONEY))
+    def get_cash_refunds(self, shift):
+        return f"{self._summary(shift)['cash_refunds']:.2f}"
+
+    @extend_schema_field(serializers.DecimalField(**MONEY))
+    def get_expected(self, shift):
+        return f"{self._summary(shift)['expected_cash']:.2f}"
+
+    @extend_schema_field(serializers.DecimalField(allow_null=True, **MONEY))
+    def get_difference(self, shift):
+        if shift.counted_cash is None:
+            return None
+        return f"{shift.counted_cash - self._summary(shift)['expected_cash']:.2f}"
+
+
+class ShiftOpenSerializer(serializers.Serializer):
+    club = serializers.PrimaryKeyRelatedField(queryset=Club.objects.none())
+    opening_cash = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        user = _user_from(self)
+        if user is not None:
+            self.fields["club"].queryset = clubs_of(user)
+
+
+class ShiftCloseSerializer(serializers.Serializer):
+    counted_cash = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0)
+    note = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class ActivitySerializer(serializers.ModelSerializer):
+    user_name = serializers.CharField(source="user.username", read_only=True, default="")
+
+    class Meta:
+        model = Activity
+        fields = ("id", "action", "user_name", "booking", "sale", "amount", "data", "created_at")
+        read_only_fields = fields
+
+
 class DailyReportSerializer(serializers.Serializer):
     club = serializers.IntegerField()
     date = serializers.DateField()
     currency = serializers.CharField()
-    received = serializers.DecimalField(**MONEY)
+    received = serializers.DecimalField(**MONEY, help_text="Bookings + counter sales - refunds")
+    refunds_total = serializers.DecimalField(**MONEY)
+    sales_total = serializers.DecimalField(**MONEY, help_text="Counter sales, not voided")
     by_method = serializers.ListField(child=serializers.DictField())
     buffet = serializers.ListField(child=serializers.DictField())
     buffet_total = serializers.DecimalField(**MONEY)

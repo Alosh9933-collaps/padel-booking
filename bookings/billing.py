@@ -1,4 +1,4 @@
-"""A booking's bill: court time plus buffet items, minus a discount and the payments received."""
+"""A booking's bill: court time plus buffet items, minus a discount; paid by payments, less refunds."""
 
 from decimal import Decimal
 
@@ -8,7 +8,7 @@ from django.db.models.functions import Coalesce
 from buffet.models import BookingItem
 
 from .discounts import offers, refresh_discount
-from .models import Booking, Payment
+from .models import Booking, Payment, Refund
 from .services import BookingError
 
 MONEY = DecimalField(max_digits=12, decimal_places=2)
@@ -29,9 +29,17 @@ def with_totals(queryset):
         .annotate(s=Sum("amount"))
         .values("s")
     )
+    refunded = (
+        Refund.objects.filter(booking=OuterRef("pk"))
+        .values("booking")
+        .annotate(s=Sum("amount"))
+        .values("s")
+    )
+    zero = Value(ZERO, output_field=MONEY)
     return queryset.annotate(
-        items_total=Coalesce(Subquery(items, output_field=MONEY), Value(ZERO, output_field=MONEY)),
-        paid_total=Coalesce(Subquery(paid, output_field=MONEY), Value(ZERO, output_field=MONEY)),
+        items_total=Coalesce(Subquery(items, output_field=MONEY), zero),
+        paid_total=Coalesce(Subquery(paid, output_field=MONEY), zero),
+        refunded_total=Coalesce(Subquery(refunded, output_field=MONEY), zero),
     )
 
 
@@ -43,8 +51,16 @@ def totals(booking):
     paid_total = getattr(booking, "paid_total", None)
     if paid_total is None:
         paid_total = sum((p.amount for p in booking.payments.all()), ZERO)
+    refunded_total = getattr(booking, "refunded_total", None)
+    if refunded_total is None:
+        refunded_total = sum((r.amount for r in booking.refunds.all()), ZERO)
     total = booking.price + items_total - booking.discount
+    # Net money kept: what came in minus what was given back.
+    paid_total = paid_total - refunded_total
     balance = total - paid_total
+    # A cancelled booking owes nothing, so all money kept on it is refundable.
+    owed = ZERO if booking.status == Booking.Status.CANCELLED else total
+    refundable = max(ZERO, paid_total - owed) if not booking.is_open else ZERO
     if booking.is_open:
         state = "open"
     elif balance <= 0:
@@ -59,6 +75,8 @@ def totals(booking):
         "discount": booking.discount,
         "total": total,
         "paid_total": paid_total,
+        "refunded_total": refunded_total,
+        "refundable": refundable,
         "balance": balance,
         "payment_status": state,
     }
@@ -162,3 +180,13 @@ def remove_discount(booking):
     _ensure_billable(booking)
     return _set_discount(booking, kind=Booking.DiscountKind.NONE)
 
+
+def add_refund(booking, amount, method, reason="", created_by=None):
+    """Give money back, never more than the customer is owed back."""
+    if amount <= 0:
+        raise BookingError("The amount must be more than zero.", "bad_amount")
+    if amount > totals(booking)["refundable"]:
+        raise BookingError("This is more than the customer is owed back.", "refund_too_much")
+    return Refund.objects.create(
+        booking=booking, amount=amount, method=method, reason=reason, created_by=created_by
+    )

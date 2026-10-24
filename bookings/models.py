@@ -111,3 +111,24 @@ class Payment(models.Model):
     def __str__(self):
         return f"{self.amount} {self.method} for booking {self.booking_id}"
 
+
+class Refund(models.Model):
+    """Money given back to a customer: after a cancellation, or when a discount left the bill overpaid."""
+
+    booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name="refunds")
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    method = models.CharField(max_length=10, choices=Payment.Method.choices, default=Payment.Method.CASH)
+    reason = models.CharField(max_length=200, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(amount__gt=0), name="refund_amount_positive"),
+        ]
+
+    def __str__(self):
+        return f"Refund {self.amount} {self.method} for booking {self.booking_id}"
+
