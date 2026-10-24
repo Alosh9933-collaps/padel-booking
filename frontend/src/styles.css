@@ -703,3 +703,80 @@ input:disabled, select:disabled { background: var(--line-2); color: var(--ink-2)
 .change strong { font: 700 28px var(--display); font-variant-numeric: tabular-nums; }
 .change-ok { background: #e1f4ea; color: var(--ok); }
 .change-short { background: #fcecec; color: var(--danger); }
+
+/* ---------- Refunds, history ---------- */
+.refund-row strong { color: var(--danger); }
+.refund-row .method { background: #fcecec; color: #9c2b2b; }
+.refund-due {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px;
+  padding: 10px 12px; border-radius: 10px; background: #e6f0fc; color: var(--court-dark);
+}
+.refund-due > span { display: flex; flex-direction: column; }
+.refund-due small { font-size: 12px; opacity: 0.85; }
+.refund-form { background: #fff5f5; border: 1px solid #f3cccc; }
+.booking-history { margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--line); }
+
+/* ---------- Activity log ---------- */
+.activity { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.act-row {
+  width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 6px; text-align: start;
+  border: 0; border-bottom: 1px solid var(--line-2); background: transparent; font: inherit; color: inherit;
+}
+button.act-row { cursor: pointer; }
+button.act-row:hover { background: #f6f8fb; }
+.activity li:last-child .act-row { border-bottom: 0; }
+.act-icon {
+  flex: none; width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center;
+  font-size: 15px; font-weight: 700; background: var(--line-2); color: var(--ink-2);
+}
+.act-discount, .act-refund { background: #fdf0dc; color: #9a5a0c; }
+.act-payment { background: #e1f4ea; color: var(--ok); }
+.act-sale, .act-item { background: #fff2e3; }
+.act-shift { background: #efe9fb; color: #5b3fa0; }
+.act-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.act-body > span { font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
+.act-body small { font-size: 12px; color: var(--muted); }
+.act-amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.act-amount.is-out { color: var(--danger); }
+.activity-compact .act-row { padding: 8px 0; }
+.activity-compact .act-icon { width: 26px; height: 26px; font-size: 13px; }
+
+/* ---------- Quick sale & counter sales ---------- */
+.head-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.sale-tile { position: relative; padding: 0; overflow: hidden; }
+.sale-tile .sale-add {
+  width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px;
+  border: 0; background: transparent; text-align: start; font: inherit; font-weight: 600; cursor: pointer;
+}
+.sale-tile .sale-add strong { color: var(--court-dark); }
+.sale-tile .stepper { margin: 0 10px 10px; align-self: flex-start; }
+.sale-tile.in-cart { border-color: var(--ball-dark); background: #fbfee8; }
+.sale-tile:hover:not(.in-cart) { background: var(--ball); border-color: var(--ball-dark); }
+.sale-form { margin-top: 12px; }
+.sale-summary { border: 1px solid var(--line); border-radius: 12px; padding: 4px 14px; }
+.sale-summary .bill-line:last-child { border-bottom: 0; }
+.sale-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line-2); }
+.sale-row:last-child { border-bottom: 0; }
+.sale-row .grow { display: flex; flex-direction: column; font-weight: 600; min-width: 0; }
+.sale-row small { font-weight: 400; color: var(--muted); font-size: 12px; }
+.sale-time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sale-row.is-void { opacity: 0.55; }
+.sale-row.is-void strong { text-decoration: line-through; }
+
+/* ---------- Shift ---------- */
+.shift { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; padding: 16px 18px; border-radius: var(--radius); }
+.shift-closed { background: #fff7ea; border: 1px dashed #e0a85a; }
+.shift-closed > div:first-child { display: flex; flex-direction: column; gap: 2px; }
+.shift-open { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.shift-open input { width: 120px; }
+.shift-open-now { background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); }
+.shift-head { display: flex; flex-direction: column; gap: 2px; }
+.shift-head .live-badge { color: var(--ok); }
+.shift-math { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; font-variant-numeric: tabular-nums; }
+.shift-math span { display: flex; flex-direction: column; font-weight: 700; }
+.shift-math small { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.shift-math b { color: var(--muted); padding-bottom: 2px; }
+.shift-expected { padding: 4px 10px; border-radius: 8px; background: var(--navy); color: var(--ball); }
+.shift-expected small { color: rgba(255, 255, 255, 0.7); }
+.change-extra { background: #e6f0fc; color: var(--court-dark); }
+.extra-text { color: var(--court-dark); }

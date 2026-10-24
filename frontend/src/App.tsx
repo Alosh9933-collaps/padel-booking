@@ -14,6 +14,7 @@ import {
 import { CourtArt, Logo } from "./components/Brand";
 import { LanguageSwitch } from "./components/LanguageSwitch";
 import { errorText, useI18n } from "./i18n";
+import ActivityLog from "./pages/ActivityLog";
 import Courts from "./pages/Courts";
 import Customers from "./pages/Customers";
 import Daily from "./pages/Daily";
@@ -51,6 +52,7 @@ const NAV = [
   { to: "/customers", key: "nav.customers", icon: "☺", managersOnly: false },
   { to: "/menu", key: "nav.menu", icon: "☕", managersOnly: false },
   { to: "/revenue", key: "nav.revenue", icon: "▮", managersOnly: true },
+  { to: "/activity", key: "nav.activity", icon: "☰", managersOnly: true },
   { to: "/courts", key: "nav.courts", icon: "▭", managersOnly: false },
   { to: "/prices", key: "nav.prices", icon: "◈", managersOnly: false },
   { to: "/staff", key: "nav.staff", icon: "♙", managersOnly: true },
@@ -168,6 +170,7 @@ function Shell({ onLogout }: { onLogout: () => void }) {
             <Route path="/prices" element={<Prices key={value.club.id} />} />
             <Route path="/revenue" element={<Revenue key={value.club.id} />} />
             <Route path="/staff" element={<Staff key={value.club.id} />} />
+            <Route path="/activity" element={<ActivityLog key={value.club.id} />} />
             <Route path="/settings" element={<Settings key={value.club.id} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

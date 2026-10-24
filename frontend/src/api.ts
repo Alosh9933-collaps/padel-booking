@@ -68,7 +68,11 @@ export interface Booking {
   court_total: string;
   items_total: string;
   total: string;
+  /** Net money kept: payments minus refunds. */
   paid_total: string;
+  refunded_total: string;
+  /** How much the customer is owed back (cancelled, or overpaid after a discount). */
+  refundable: string;
   balance: string;
   payment_status: PaymentStatus;
 }
@@ -100,9 +104,19 @@ export interface Offer {
   note: string;
 }
 
+export interface Refund {
+  id: number;
+  amount: string;
+  method: PaymentMethod;
+  reason: string;
+  created_at: string;
+  created_by_name: string;
+}
+
 export interface BookingBill extends Booking {
   items: BillItem[];
   payments: Payment[];
+  refunds: Refund[];
   /** Loyalty discounts this booking qualifies for, best first. */
   offers: Offer[];
 }
@@ -154,8 +168,11 @@ export interface DailyReport {
   club: number;
   date: string;
   currency: string;
+  /** Bookings + counter sales - refunds. */
   received: string;
-  by_method: { method: PaymentMethod; total: string; count: number }[];
+  refunds_total: string;
+  sales_total: string;
+  by_method: { method: PaymentMethod; bookings: string; sales: string; refunds: string; total: string; count: number }[];
   buffet: { name: string; quantity: number; total: string }[];
   buffet_total: string;
   discount_total: string;
@@ -197,6 +214,58 @@ export interface StaffMember {
   full_name: string;
   role: Role;
   last_login: string | null;
+}
+
+export interface SaleItem {
+  id: number;
+  product: number | null;
+  name: string;
+  unit_price: string;
+  quantity: number;
+  total: string;
+}
+
+export interface Sale {
+  id: number;
+  club: number;
+  customer: number | null;
+  customer_name: string;
+  method: PaymentMethod;
+  total: string;
+  items: SaleItem[];
+  created_at: string;
+  created_by_name: string;
+  voided_at: string | null;
+  voided_by_name: string;
+  void_reason: string;
+}
+
+export interface Shift {
+  id: number;
+  club: number;
+  opened_at: string;
+  opened_by_name: string;
+  opening_cash: string;
+  closed_at: string | null;
+  closed_by_name: string;
+  counted_cash: string | null;
+  note: string;
+  cash_bookings: string;
+  cash_sales: string;
+  cash_refunds: string;
+  expected: string;
+  difference: string | null;
+}
+
+export interface Activity {
+  id: number;
+  action: string;
+  user_name: string;
+  booking: number | null;
+  sale: number | null;
+  amount: string | null;
+  data: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface WeeklyWeek {
@@ -426,6 +495,8 @@ export const Api = {
     api<BookingBill>(`/bookings/${bookingId}/discount/`, { method: "DELETE" }),
   addPayment: (bookingId: number, body: { amount: string; method: PaymentMethod; payer_name: string }) =>
     api<BookingBill>(`/bookings/${bookingId}/payments/`, { method: "POST", body }),
+  addRefund: (bookingId: number, body: { amount: string; method: PaymentMethod; reason: string }) =>
+    api<BookingBill>(`/bookings/${bookingId}/refunds/`, { method: "POST", body }),
   removePayment: (bookingId: number, paymentId: number) =>
     api<BookingBill>(`/bookings/${bookingId}/payments/${paymentId}/`, { method: "DELETE" }),
 
@@ -458,6 +529,29 @@ export const Api = {
   discountSettings: (club: number) => api<DiscountSettings>(`/clubs/${club}/discounts/`),
   updateDiscountSettings: (club: number, patch: Partial<DiscountSettings>) =>
     api<DiscountSettings>(`/clubs/${club}/discounts/`, { method: "PATCH", body: patch }),
+
+  sales: (club: number, date: string) =>
+    api<Paged<Sale>>("/sales/", { query: { club, date } }).then((d) => asList(d)),
+  createSale: (body: {
+    club: number;
+    items: { product: number; quantity: number }[];
+    method: PaymentMethod;
+    customer_name: string;
+    customer_phone: string;
+  }) => api<Sale>("/sales/", { method: "POST", body }),
+  voidSale: (id: number, reason: string) => api<Sale>(`/sales/${id}/void/`, { method: "POST", body: { reason } }),
+
+  /** The open shift, or null when the drawer is closed. */
+  currentShift: (club: number) =>
+    api<Shift | undefined>("/shifts/current/", { query: { club } }).then((s) => s ?? null),
+  openShift: (club: number, opening_cash: string) =>
+    api<Shift>("/shifts/open/", { method: "POST", body: { club, opening_cash } }),
+  closeShift: (id: number, counted_cash: string, note: string) =>
+    api<Shift>(`/shifts/${id}/close/`, { method: "POST", body: { counted_cash, note } }),
+  shifts: (club: number) => api<Shift[]>("/shifts/", { query: { club } }),
+
+  activity: (query: { club: number; date?: string; booking?: number; action?: string }) =>
+    api<Activity[]>("/activity/", { query }),
 
   staff: (club: number) => api<Paged<StaffMember>>("/staff/", { query: { club } }).then((d) => asList(d)),
   addStaff: (body: { club: number; username: string; password: string; first_name: string; role: Role }) =>

@@ -77,7 +77,7 @@ export function shortDate(day: string): string {
 }
 
 export function dateTime(iso: string, timeZone: string): string {
-  return new Date(iso).toLocaleString(locale, { timeZone, dateStyle: "medium", timeStyle: "short" });
+  return new Date(iso).toLocaleString(locale, { timeZone, dateStyle: "medium", timeStyle: "short", hourCycle: "h23" });
 }
 
 /** Always "HH:MM", 24-hour, in the club's timezone (also used as <input type="time"> values). */
@@ -98,6 +98,14 @@ export function clockTime(iso: string, timeZone: string): string {
  */
 export function ltr(text: string): string {
   return `⁦${text}⁩`;
+}
+
+/**
+ * Let a phrase take the direction of its own first letter, so "2 × Coffee"
+ * stays in order inside Arabic text and "2 × قهوة" inside English text.
+ */
+export function isolate(text: string): string {
+  return `⁨${text}⁩`;
 }
 
 /** A minus amount ("−₽500", "−10%") that keeps its sign in front in right-to-left text. */

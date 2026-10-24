@@ -2,7 +2,10 @@ import { useEffect, useState } from "react";
 
 import { Api, type DailyReport, type PaymentMethod } from "../api";
 import { BillModal, PaymentBadge } from "../components/Bill";
-import { addDays, longDate, money, timeRange, todayIn } from "../format";
+import { QuickSaleModal } from "../components/QuickSale";
+import { SalesList } from "../components/SalesList";
+import { ShiftHistory, ShiftPanel } from "../components/ShiftPanel";
+import { addDays, longDate, minus, money, timeRange, todayIn } from "../format";
 import { errorText, useT } from "../i18n";
 import { useClub } from "../session";
 import { useNow } from "./Schedule";
@@ -12,8 +15,9 @@ const METHODS: PaymentMethod[] = ["cash", "card", "transfer"];
 /** End-of-day cash-up: what came in, what the buffet sold, which bills are still open. */
 export default function Daily() {
   const t = useT();
-  const { club } = useClub();
+  const { club, canManage } = useClub();
   const now = useNow();
+  const [selling, setSelling] = useState(false);
   const today = todayIn(club.timezone);
   const [date, setDate] = useState(today);
   const [report, setReport] = useState<DailyReport | null>(null);
@@ -48,6 +52,7 @@ export default function Daily() {
           <p className="eyebrow">{t("nav.daily")}</p>
           <h1>{longDate(date)}</h1>
         </div>
+        <div className="head-actions">
         <div className="date-nav">
           <button className="btn" onClick={() => setDate(addDays(date, -1))} aria-label={t("schedule.prevDay")}>
             <span className="flip">‹</span>
@@ -60,8 +65,13 @@ export default function Daily() {
             <span className="flip">›</span>
           </button>
         </div>
+          <button className="btn btn-primary" onClick={() => setSelling(true)}>
+            🛒 {t("sale.button")}
+          </button>
+        </div>
       </header>
       {error && <div className="alert">{error}</div>}
+      {date === today && <ShiftPanel version={version} onChanged={() => setVersion((v) => v + 1)} />}
 
       {report && (
         <div className={loading ? "is-loading" : ""}>
@@ -75,7 +85,15 @@ export default function Daily() {
               <div key={m} className="stat">
                 <span className="stat-label">{t(`method.${m}`)}</span>
                 <strong className="stat-value">{money(byMethod(m)?.total ?? 0, report.currency)}</strong>
-                <span className="stat-sub">{t("daily.payments", { count: byMethod(m)?.count ?? 0 })}</span>
+                <span className="stat-sub">
+                  {t("daily.methodBreakdown", {
+                    bookings: money(byMethod(m)?.bookings ?? 0, report.currency),
+                    sales: money(byMethod(m)?.sales ?? 0, report.currency),
+                  })}
+                  {Number(byMethod(m)?.refunds ?? 0) > 0 && (
+                    <span className="due-text"> · {t("daily.refunds")} {minus(money(byMethod(m)?.refunds ?? 0, report.currency))}</span>
+                  )}
+                </span>
               </div>
             ))}
           </div>
@@ -128,10 +146,17 @@ export default function Daily() {
               {Number(report.discount_total) > 0 && (
                 <p className="hint">{t("daily.discounts", { amount: money(report.discount_total, report.currency) })}</p>
               )}
+              {Number(report.refunds_total) > 0 && (
+                <p className="hint">{t("daily.refundsGiven", { amount: money(report.refunds_total, report.currency) })}</p>
+              )}
             </section>
+
+            <SalesList date={date} version={version} onChanged={() => setVersion((v) => v + 1)} />
           </div>
+          {canManage && <ShiftHistory version={version} />}
         </div>
       )}
+      {selling && <QuickSaleModal onClose={() => setSelling(false)} onDone={() => setVersion((v) => v + 1)} />}
 
       {bill !== null && (
         <BillModal

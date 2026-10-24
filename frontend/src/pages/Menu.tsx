@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { Api, type Product } from "../api";
 import { Modal } from "../components/Modal";
-import { money } from "../format";
+import { QuickSaleModal } from "../components/QuickSale";
+import { SalesList } from "../components/SalesList";
+import { money, todayIn } from "../format";
 import { errorText, useT } from "../i18n";
 import { useClub, useToast } from "../session";
 
@@ -12,6 +14,8 @@ export default function Menu() {
   const [products, setProducts] = useState<Product[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Product | "new" | null>(null);
+  const [selling, setSelling] = useState(false);
+  const [version, setVersion] = useState(0);
 
   const load = () =>
     Api.products(club.id)
@@ -44,11 +48,16 @@ export default function Menu() {
           <p className="eyebrow">{t("nav.menu")}</p>
           <h1>{t("menu.title")}</h1>
         </div>
-        {canManage && (
-          <button className="btn btn-primary" onClick={() => setEditing("new")}>
-            + {t("menu.add")}
+        <div className="head-actions">
+          {canManage && (
+            <button className="btn" onClick={() => setEditing("new")}>
+              + {t("menu.add")}
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={() => setSelling(true)} disabled={!products?.some((p) => p.is_active)}>
+            🛒 {t("sale.button")}
           </button>
-        )}
+        </div>
       </header>
       <p className="note">{canManage ? t("menu.hintManager") : t("menu.hintStaff")}</p>
       {error && <div className="alert">{error}</div>}
@@ -82,6 +91,9 @@ export default function Menu() {
         </section>
       ))}
 
+      <SalesList date={todayIn(club.timezone)} version={version} onChanged={() => setVersion((v) => v + 1)} />
+
+      {selling && <QuickSaleModal onClose={() => setSelling(false)} onDone={() => setVersion((v) => v + 1)} />}
       {editing && (
         <ProductModal
           product={editing === "new" ? null : editing}

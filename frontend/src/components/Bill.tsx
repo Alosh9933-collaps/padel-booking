@@ -1,9 +1,19 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 
-import { Api, type Booking, type BookingBill, type DiscountInput, type Offer, type PaymentMethod, type Product } from "../api";
+import {
+  Api,
+  type Activity,
+  type BookingBill,
+  type DiscountInput,
+  type PaymentMethod,
+  type Product,
+} from "../api";
 import { clockTime, dateIn, dateTime, duration, longDate, ltr, minus, money, timeRange, zoneOffset } from "../format";
-import { errorText, useT, type T } from "../i18n";
+import { errorText, useT } from "../i18n";
+import { discountLabel } from "../labels";
 import { useClub, useToast } from "../session";
+import { ActivityList } from "./ActivityList";
+import { CashCalculator } from "./CashCalculator";
 import { Modal } from "./Modal";
 
 const MINUTE = 60_000;
@@ -19,22 +29,6 @@ function nextDay(day: string) {
   const d = new Date(`${day}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + 1);
   return d.toISOString().slice(0, 10);
-}
-
-/** What a discount is called on the bill, in the UI language. */
-export function discountLabel(kind: Booking["discount_kind"] | Offer["kind"], note: string, t: T): string {
-  switch (kind) {
-    case "first_visit":
-      return t("discount.first_visit");
-    case "nth_visit":
-      return t("discount.nth_visit", { visit: note });
-    case "category":
-      return t("discount.category", { name: note });
-    case "manual":
-      return note ? t("discount.manualWith", { note }) : t("discount.manual");
-    default:
-      return "";
-  }
 }
 
 export function PaymentBadge({ booking }: { booking: Pick<BookingBill, "payment_status"> }) {
@@ -217,7 +211,7 @@ export function BillModal({
       <div className="chips">
         {bill.status !== "confirmed" && <span className="chip chip-off">{t(`status.${bill.status}`)}</span>}
         {bill.series && <span className="chip">↻ {t("bill.weekly")}</span>}
-        <PaymentBadge booking={bill} />
+        {bill.status !== "cancelled" && <PaymentBadge booking={bill} />}
       </div>
 
       {bill.is_open && active && (
@@ -324,18 +318,19 @@ export function BillModal({
               <span>{t("bill.paid")}</span>
               <span>{money(bill.paid_total, club.currency)}</span>
             </div>
-            {!bill.is_open && Number(bill.balance) > 0 && (
+            {Number(bill.refunded_total) > 0 && (
+              <div className="bill-sub">
+                <span>{t("refund.refunded")}</span>
+                <span>{minus(money(bill.refunded_total, club.currency))}</span>
+              </div>
+            )}
+            {!bill.is_open && bill.status !== "cancelled" && Number(bill.balance) > 0 && (
               <div className="bill-due">
                 <span>{t("bill.due")}</span>
                 <strong>{money(bill.balance, club.currency)}</strong>
               </div>
             )}
-            {!bill.is_open && Number(bill.balance) < 0 && (
-              <div className="bill-due bill-refund">
-                <span>{t("bill.refund")}</span>
-                <strong>{money(-Number(bill.balance), club.currency)}</strong>
-              </div>
-            )}
+
           </section>
 
           <Payments
@@ -343,8 +338,10 @@ export function BillModal({
             canRemove={canManage}
             busy={busy}
             onPay={(body) => run(() => Api.addPayment(bill.id, body), () => t("bill.paymentSaved"))}
+            onRefund={(body) => run(() => Api.addRefund(bill.id, body), () => t("refund.saved"))}
             onRemove={(id) => run(() => Api.removePayment(bill.id, id))}
           />
+          {canManage && <BookingHistory bookingId={bill.id} />}
         </>
       )}
       {error && <div className="alert">{error}</div>}
@@ -357,21 +354,25 @@ function Payments({
   canRemove,
   busy,
   onPay,
+  onRefund,
   onRemove,
 }: {
   bill: BookingBill;
   canRemove: boolean;
   busy: boolean;
   onPay: (body: { amount: string; method: PaymentMethod; payer_name: string }) => Promise<unknown>;
+  onRefund: (body: { amount: string; method: PaymentMethod; reason: string }) => Promise<unknown>;
   onRemove: (id: number) => void;
 }) {
   const t = useT();
   const { club } = useClub();
   const balance = Number(bill.balance);
+  const refundable = Number(bill.refundable);
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState<PaymentMethod>("cash");
   const [payer, setPayer] = useState("");
   const [received, setReceived] = useState("");
+  const [refunding, setRefunding] = useState(false);
 
   // Suggest the full balance whenever it changes.
   useEffect(() => {
@@ -388,37 +389,73 @@ function Payments({
     }
   };
 
-  // Cash: what the customer handed over, and the change to give back.
-  const due = Number(amount) || 0;
-  const handed = Number(received) || 0;
-  const change = handed - due;
-  const notes = useMemo(() => {
-    const values = new Set<number>([due]);
-    for (const step of [100, 500, 1000, 5000]) values.add(Math.ceil(due / step) * step);
-    return [...values].filter((v) => v > 0).sort((a, b) => a - b).slice(0, 5);
-  }, [due]);
-
   const canPay = bill.status !== "cancelled" && (bill.is_open || balance > 0);
+  // Payments and refunds in the order they happened.
+  const rows = [
+    ...bill.payments.map((p) => ({ key: `p${p.id}`, at: p.created_at, payment: p, refund: null })),
+    ...bill.refunds.map((r) => ({ key: `r${r.id}`, at: r.created_at, payment: null, refund: r })),
+  ].sort((a, b) => a.at.localeCompare(b.at));
 
   return (
     <section className="payments">
       <h3>{t("bill.payments")}</h3>
-      {bill.payments.length === 0 && <p className="muted small">{t("bill.noPayments")}</p>}
-      {bill.payments.map((p) => (
-        <div key={p.id} className="payment-row">
-          <span className={`method method-${p.method}`}>{t(`method.${p.method}`)}</span>
-          <span className="grow">
-            {p.payer_name || "—"}
-            <small>{dateTime(p.created_at, club.timezone)}</small>
-          </span>
-          <strong>{money(p.amount, club.currency)}</strong>
-          {canRemove && (
-            <button className="icon-btn" onClick={() => onRemove(p.id)} disabled={busy} title={t("bill.removePayment")} aria-label={t("bill.removePayment")}>
-              ✕
+      {rows.length === 0 && <p className="muted small">{t("bill.noPayments")}</p>}
+      {rows.map(({ key, payment: p, refund: r }) =>
+        p ? (
+          <div key={key} className="payment-row">
+            <span className={`method method-${p.method}`}>{t(`method.${p.method}`)}</span>
+            <span className="grow">
+              {p.payer_name || "—"}
+              <small>
+                {dateTime(p.created_at, club.timezone)}
+                {p.created_by_name && ` · ${p.created_by_name}`}
+              </small>
+            </span>
+            <strong>{money(p.amount, club.currency)}</strong>
+            {canRemove && (
+              <button className="icon-btn" onClick={() => onRemove(p.id)} disabled={busy} title={t("bill.removePayment")} aria-label={t("bill.removePayment")}>
+                ✕
+              </button>
+            )}
+          </div>
+        ) : (
+          r && (
+            <div key={key} className="payment-row refund-row">
+              <span className={`method method-${r.method}`}>↩ {t(`method.${r.method}`)}</span>
+              <span className="grow">
+                {r.reason ? t("refund.withReason", { reason: r.reason }) : t("refund.label")}
+                <small>
+                  {dateTime(r.created_at, club.timezone)}
+                  {r.created_by_name && ` · ${r.created_by_name}`}
+                </small>
+              </span>
+              <strong>{minus(money(r.amount, club.currency))}</strong>
+            </div>
+          )
+        ),
+      )}
+
+      {refundable > 0 &&
+        (refunding ? (
+          <RefundForm
+            refundable={refundable}
+            busy={busy}
+            onCancel={() => setRefunding(false)}
+            onSubmit={async (body) => {
+              if (await onRefund(body)) setRefunding(false);
+            }}
+          />
+        ) : (
+          <div className="refund-due">
+            <span>
+              <strong>{t("refund.owed", { amount: money(refundable, club.currency) })}</strong>
+              <small>{bill.status === "cancelled" ? t("refund.whyCancelled") : t("refund.whyOverpaid")}</small>
+            </span>
+            <button className="btn btn-small" onClick={() => setRefunding(true)}>
+              ↩ {t("refund.give")}
             </button>
-          )}
-        </div>
-      ))}
+          </div>
+        ))}
 
       {canPay && (
         <form className="pay-form" onSubmit={submit}>
@@ -439,40 +476,7 @@ function Payments({
               <input value={payer} onChange={(e) => setPayer(e.target.value)} maxLength={120} placeholder={t("common.optional")} />
             </label>
           </div>
-          {method === "cash" && due > 0 && (
-            <div className="cash-box">
-              <label className="field">
-                <span>{t("cash.received")}</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={received}
-                  onChange={(e) => setReceived(e.target.value)}
-                  placeholder={t("cash.receivedHint")}
-                />
-              </label>
-              <div className="quick">
-                {notes.map((v) => (
-                  <button type="button" key={v} className={handed === v ? "on" : ""} onClick={() => setReceived(String(v))}>
-                    {v === due ? t("cash.exact") : money(v, club.currency)}
-                  </button>
-                ))}
-              </div>
-              {received !== "" &&
-                (change >= 0 ? (
-                  <div className="change change-ok">
-                    <span>{t("cash.change")}</span>
-                    <strong>{money(change, club.currency)}</strong>
-                  </div>
-                ) : (
-                  <div className="change change-short">
-                    <span>{t("cash.short")}</span>
-                    <strong>{money(-change, club.currency)}</strong>
-                  </div>
-                ))}
-            </div>
-          )}
+          {method === "cash" && <CashCalculator due={Number(amount) || 0} received={received} onChange={setReceived} />}
           {!bill.is_open && balance > 0 && (
             <div className="quick">
               <span className="muted small">{t("bill.split")}</span>
@@ -491,6 +495,87 @@ function Payments({
           </button>
         </form>
       )}
+    </section>
+  );
+}
+
+function RefundForm({
+  refundable,
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  refundable: number;
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (body: { amount: string; method: PaymentMethod; reason: string }) => void;
+}) {
+  const t = useT();
+  const { club } = useClub();
+  const [amount, setAmount] = useState(String(refundable));
+  const [method, setMethod] = useState<PaymentMethod>("cash");
+  const [reason, setReason] = useState("");
+
+  return (
+    <form
+      className="pay-form refund-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit({ amount, method, reason: reason.trim() });
+      }}
+    >
+      <strong>↩ {t("refund.title")}</strong>
+      <div className="segmented">
+        {METHODS.map((m) => (
+          <button type="button" key={m} className={method === m ? "on" : ""} onClick={() => setMethod(m)}>
+            {t(`method.${m}`)}
+          </button>
+        ))}
+      </div>
+      <div className="pay-inputs">
+        <label className="field">
+          <span>{t("bill.amount")}</span>
+          <input type="number" min="0.01" max={refundable} step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} required />
+        </label>
+        <label className="field">
+          <span>{t("refund.reason")}</span>
+          <input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={200} placeholder={t("common.optional")} />
+        </label>
+      </div>
+      <div className="discount-actions">
+        <button type="button" className="btn btn-small" onClick={onCancel}>
+          {t("common.close")}
+        </button>
+        <button className="btn btn-small btn-danger" disabled={busy || !amount}>
+          {t("refund.confirm", { amount: money(amount || 0, club.currency) })}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** What happened to this booking, for owners and managers. */
+function BookingHistory({ bookingId }: { bookingId: number }) {
+  const t = useT();
+  const { club } = useClub();
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<Activity[] | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    Api.activity({ club: club.id, booking: bookingId })
+      .then(setItems)
+      .catch(() => setItems([]));
+  }, [open, club.id, bookingId]);
+
+  return (
+    <section className="booking-history">
+      <button className="link-btn" onClick={() => setOpen((v) => !v)}>
+        {open ? "▾" : "▸"} {t("activity.forBooking")}
+      </button>
+      {open && items === null && <p className="muted small">{t("common.loading")}</p>}
+      {open && items?.length === 0 && <p className="muted small">{t("activity.empty")}</p>}
+      {open && items && items.length > 0 && <ActivityList items={items} compact />}
     </section>
   );
 }
