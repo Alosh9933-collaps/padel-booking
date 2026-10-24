@@ -7,6 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from bookings.services import BookingError, resolve_customer
+from wallet.services import credit_back, spend
 
 from .models import Sale, SaleItem
 
@@ -27,9 +28,10 @@ def create_sale(*, club, lines, method, customer_name="", customer_phone="", cre
         raise BookingError("Add at least one product.", "empty_sale")
 
     total = sum((products[pk].price * qty for pk, qty in quantities.items()), Decimal("0"))
+    customer = resolve_customer(club, customer_name, customer_phone)
     sale = Sale.objects.create(
         club=club,
-        customer=resolve_customer(club, customer_name, customer_phone),
+        customer=customer,
         customer_name=customer_name,
         method=method,
         total=total,
@@ -39,6 +41,8 @@ def create_sale(*, club, lines, method, customer_name="", customer_phone="", cre
         SaleItem(sale=sale, product=products[pk], name=products[pk].name, unit_price=products[pk].price, quantity=qty)
         for pk, qty in quantities.items()
     )
+    if method == "balance":
+        spend(customer, total, kind="sale", sale=sale, created_by=created_by)
     return sale
 
 
@@ -46,8 +50,11 @@ def void_sale(sale, *, user=None, reason=""):
     """The money was given back: the sale stays on record but counts for nothing."""
     if sale.voided_at is not None:
         raise BookingError("This sale is already voided.", "sale_voided")
-    sale.voided_at = timezone.now()
-    sale.voided_by = user
-    sale.void_reason = reason
-    sale.save(update_fields=["voided_at", "voided_by", "void_reason"])
+    with transaction.atomic():
+        sale.voided_at = timezone.now()
+        sale.voided_by = user
+        sale.void_reason = reason
+        sale.save(update_fields=["voided_at", "voided_by", "void_reason"])
+        if sale.method == "balance":
+            credit_back(sale.customer, sale.total, sale=sale, created_by=user, note=reason)
     return sale

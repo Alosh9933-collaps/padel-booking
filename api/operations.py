@@ -22,6 +22,8 @@ from buffet.models import BookingItem, Product, Sale, SaleItem
 from buffet.sales import create_sale, void_sale
 from cashdesk.models import Activity, Shift
 from cashdesk.services import close_shift, current_shift, open_shift, record
+from wallet.models import BalanceEntry, TopUpPlan
+from wallet.services import balance_of, top_up
 from clubs.access import can_manage, clubs_of, managed_clubs_of
 from clubs.models import Customer, CustomerCategory, Membership
 
@@ -36,6 +38,9 @@ from .serializers import (
     ShiftCloseSerializer,
     ShiftOpenSerializer,
     ShiftSerializer,
+    BalanceEntrySerializer,
+    TopUpPlanSerializer,
+    TopUpSerializer,
     VoidSerializer,
     StaffCreateSerializer,
     StaffSerializer,
@@ -129,6 +134,12 @@ class CustomerViewSet(
             .values("s")
         )
         zero = Value(ZERO, output_field=MONEY)
+        balance = (
+            BalanceEntry.objects.filter(customer=OuterRef("pk"))
+            .values("customer")
+            .annotate(s=Sum("amount"))
+            .values("s")
+        )
         return qs.annotate(
             visits=Count("bookings", filter=visited, distinct=True),
             no_shows=Count("bookings", filter=Q(bookings__status=Booking.Status.NO_SHOW), distinct=True),
@@ -136,7 +147,49 @@ class CustomerViewSet(
             spent=Coalesce(Subquery(paid, output_field=MONEY), zero)
             - Coalesce(Subquery(refunded, output_field=MONEY), zero)
             + Coalesce(Subquery(sales, output_field=MONEY), zero),
+            balance=Coalesce(Subquery(balance, output_field=MONEY), zero),
         ).order_by("name")
+
+    @extend_schema(responses=BalanceEntrySerializer(many=True))
+    @action(detail=True, methods=["get"])
+    def balance(self, request, pk=None):
+        """The customer's balance movements, newest first."""
+        customer = self.get_object()
+        entries = customer.balance_entries.select_related("plan", "created_by").order_by("-created_at")[:100]
+        return Response(BalanceEntrySerializer(entries, many=True).data)
+
+    @extend_schema(
+        request=TopUpSerializer,
+        responses={201: BalanceEntrySerializer},
+        description="Money comes in: buy a package (plan) or top up any amount. Any staff member can do it.",
+    )
+    @action(detail=True, methods=["post"])
+    def topup(self, request, pk=None):
+        customer = self.get_object()
+        serializer = TopUpSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        entry = top_up(
+            customer,
+            method=data["method"],
+            plan=data.get("plan"),
+            paid=data.get("paid"),
+            credit=data.get("credit"),
+            created_by=request.user,
+            note=data["note"],
+        )
+        record(
+            customer.club,
+            request.user,
+            "wallet.topup",
+            amount=entry.paid,
+            customer=customer.name,
+            credit=entry.amount,
+            method=entry.method,
+            plan=entry.plan.name if entry.plan else "",
+            balance=balance_of(customer),
+        )
+        return Response(BalanceEntrySerializer(entry).data, status=status.HTTP_201_CREATED)
 
     @extend_schema(
         parameters=[
@@ -252,20 +305,26 @@ class DailyReportView(APIView):
         def by(qs, field):
             return {r["method"]: (r["s"], r["n"]) for r in qs.values("method").annotate(s=Sum(field), n=Count("id"))}
 
+        topups = BalanceEntry.objects.filter(club=club, kind=BalanceEntry.Kind.TOPUP, **window)
         paid_by, refunded_by, sold_by = by(payments, "amount"), by(refunds, "amount"), by(sales, "total")
+        topped_by = by(topups, "paid")
         by_method = []
-        for method in Payment.Method.values:
+        # Money that really came in or went out. Balance spending is not new money.
+        for method in ("cash", "card", "transfer"):
             paid, n_paid = paid_by.get(method, (ZERO, 0))
             sold, n_sold = sold_by.get(method, (ZERO, 0))
+            topped, n_topped = topped_by.get(method, (ZERO, 0))
             refunded, n_refunded = refunded_by.get(method, (ZERO, 0))
             by_method.append({
                 "method": method,
                 "bookings": f"{paid:.2f}",
                 "sales": f"{sold:.2f}",
+                "topups": f"{topped:.2f}",
                 "refunds": f"{refunded:.2f}",
-                "total": f"{paid + sold - refunded:.2f}",
-                "count": n_paid + n_sold,
+                "total": f"{paid + sold + topped - refunded:.2f}",
+                "count": n_paid + n_sold + n_topped,
             })
+        balance_used = paid_by.get("balance", (ZERO, 0))[0] + sold_by.get("balance", (ZERO, 0))[0]
         bookings = Booking.objects.filter(
             court__club=club, start_at__gte=start, start_at__lt=end
         ).exclude(status=Booking.Status.CANCELLED)
@@ -294,8 +353,10 @@ class DailyReportView(APIView):
             "date": day,
             "currency": club.currency,
             "received": sum((Decimal(r["total"]) for r in by_method), ZERO),
-            "refunds_total": refunds.aggregate(s=Sum("amount"))["s"] or ZERO,
+            "refunds_total": refunds.exclude(method="balance").aggregate(s=Sum("amount"))["s"] or ZERO,
             "sales_total": sales.aggregate(s=Sum("total"))["s"] or ZERO,
+            "topups_total": topups.aggregate(s=Sum("paid"))["s"] or ZERO,
+            "balance_used": balance_used,
             "by_method": by_method,
             "buffet": [
                 {"name": r["name"], "quantity": r["qty"], "total": f"{r['total']:.2f}"} for r in buffet
@@ -504,3 +565,22 @@ class ActivityViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     )
     def list(self, request, *args, **kwargs):
         return Response(ActivitySerializer(self.get_queryset()[:300], many=True).data)
+
+
+class TopUpPlanViewSet(ManagedByClubMixin, viewsets.ModelViewSet):
+    """Packages customers can buy: pay a price, get more credit on their balance."""
+
+    serializer_class = TopUpPlanSerializer
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return TopUpPlan.objects.none()
+        qs = TopUpPlan.objects.filter(club__in=clubs_of(self.request.user))
+        club = _club_param(self.request)
+        if club and self.action == "list":
+            qs = qs.filter(club_id=club)
+        return qs.order_by("price")
+
+    @extend_schema(parameters=[OpenApiParameter("club", int)])
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)

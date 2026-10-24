@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import F, Q
+from django.utils.text import slugify
  
  
 class Club(models.Model):
@@ -32,6 +33,25 @@ class Club(models.Model):
         choices=SlotMinutes.choices, default=SlotMinutes.THIRTY
     )
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Language(models.TextChoices):
+        ENGLISH = "en", "English"
+        ARABIC = "ar", "Arabic"
+        RUSSIAN = "ru", "Russian"
+
+    # Online booking: a public page at /book/<slug>, off until the club turns it on.
+    slug = models.SlugField(max_length=60, unique=True, null=True, blank=True)
+    online_booking_enabled = models.BooleanField(default=False)
+    online_days_ahead = models.PositiveSmallIntegerField(
+        default=14, validators=[MinValueValidator(1), MaxValueValidator(90)]
+    )
+    online_cancel_hours = models.PositiveSmallIntegerField(
+        default=12, validators=[MaxValueValidator(168)], help_text="Customers can cancel up to this many hours before"
+    )
+    # Telegram: the staff group that hears about online bookings, and the
+    # language of messages sent to customers.
+    telegram_chat_id = models.CharField(max_length=40, blank=True)
+    language = models.CharField(max_length=2, choices=Language.choices, default=Language.RUSSIAN)
  
     class Meta:
         constraints = [
@@ -47,6 +67,18 @@ class Club(models.Model):
         except (ZoneInfoNotFoundError, ValueError):
             raise ValidationError({"timezone": "Unknown timezone name."})
  
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = self._free_slug()
+        super().save(*args, **kwargs)
+
+    def _free_slug(self):
+        base = slugify(self.name)[:50] or "club"
+        slug, n = base, 2
+        while Club.objects.filter(slug=slug).exclude(pk=self.pk).exists():
+            slug, n = f"{base}-{n}", n + 1
+        return slug
+
     def __str__(self):
         return self.name
  
@@ -192,6 +224,8 @@ class Customer(models.Model):
         CustomerCategory, null=True, blank=True, on_delete=models.SET_NULL, related_name="customers"
     )
     notes = models.TextField(blank=True)
+    # Set when the customer opens the club's Telegram bot from a booking link.
+    telegram_chat_id = models.CharField(max_length=40, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

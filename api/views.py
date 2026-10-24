@@ -3,7 +3,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from django.db.models import Count, F, OuterRef, Subquery, Sum
+from django.db.models import Count, F, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import TruncDate
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -23,6 +23,7 @@ from bookings.billing import (
     apply_manual_discount,
     apply_offer,
     remove_discount,
+    remove_payment,
     set_item_quantity,
     totals,
     with_totals,
@@ -281,6 +282,14 @@ class BookingViewSet(
                 qs = qs.filter(customer_id=int(params["customer"]))
             if params.get("status"):
                 qs = qs.filter(status=params["status"])
+            search = params.get("search", "").strip()
+            if search:
+                # Newest first, so the latest matching bookings come up.
+                digits = "".join(ch for ch in search if ch.isdigit())
+                match = Q(customer_name__icontains=search)
+                if len(digits) >= 3:
+                    match |= Q(customer_phone__contains=digits) | Q(customer__phone__contains=digits)
+                return qs.filter(match).order_by("-start_at")[:30]
         return qs.order_by("start_at")
 
     def log(self, booking, action, amount=None, **data):
@@ -313,6 +322,7 @@ class BookingViewSet(
             OpenApiParameter("court", int),
             OpenApiParameter("customer", int),
             OpenApiParameter("status", str, enum=["confirmed", "cancelled", "no_show"]),
+            OpenApiParameter("search", str, description="Customer name, or 3+ digits of the phone (30 newest)"),
         ]
     )
     def list(self, request, *args, **kwargs):
@@ -348,11 +358,11 @@ class BookingViewSet(
     )
     def partial_update(self, request, pk=None):
         booking = self.get_object()
-        serializer = BookingChangeSerializer(data=request.data)
+        serializer = BookingChangeSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        before = (booking.start_at, booking.end_at, booking.price, booking.customer_name)
+        before = (booking.start_at, booking.end_at, booking.price, booking.customer_name, booking.court.name)
         change_booking(booking, **serializer.validated_data)
-        if (booking.start_at, booking.end_at) != before[:2]:
+        if (booking.start_at, booking.end_at) != before[:2] or booking.court.name != before[4]:
             self.log(
                 booking,
                 "booking.changed",
@@ -361,6 +371,7 @@ class BookingViewSet(
                 old_end=before[1].isoformat(),
                 end=booking.end_at.isoformat(),
                 old_price=before[2],
+                old_court=before[4],
             )
         elif booking.customer_name != before[3]:
             self.log(booking, "booking.renamed", old_customer=before[3])
@@ -559,8 +570,8 @@ class BookingViewSet(
         booking = self.get_object()
         if not can_manage(request.user, booking.court.club):
             raise PermissionDenied(MANAGERS_ONLY)
-        payment = get_object_or_404(booking.payments, pk=payment_id)
-        payment.delete()
+        payment = get_object_or_404(booking.payments.select_related("booking__customer"), pk=payment_id)
+        remove_payment(payment, created_by=request.user)
         self.log(booking, "payment.removed", payment.amount, method=payment.method)
         return self.bill(booking)
 

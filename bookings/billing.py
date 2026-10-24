@@ -2,10 +2,12 @@
 
 from decimal import Decimal
 
+from django.db import transaction
 from django.db.models import DecimalField, F, OuterRef, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 
 from buffet.models import BookingItem
+from wallet.services import credit_back, spend
 
 from .discounts import offers, refresh_discount
 from .models import Booking, Payment, Refund
@@ -127,6 +129,7 @@ def set_item_quantity(item, quantity):
     return item
 
 
+@transaction.atomic
 def add_payment(booking, amount, method, payer_name="", created_by=None):
     _ensure_billable(booking)
     if amount <= 0:
@@ -134,9 +137,19 @@ def add_payment(booking, amount, method, payer_name="", created_by=None):
     # A running open play has no final price yet, so a prepayment is fine there.
     if not booking.is_open and amount > totals(booking)["balance"]:
         raise BookingError("This is more than what is left to pay.", "overpayment")
+    if method == Payment.Method.BALANCE:
+        spend(booking.customer, amount, kind="payment", booking=booking, created_by=created_by)
     return Payment.objects.create(
         booking=booking, amount=amount, method=method, payer_name=payer_name, created_by=created_by
     )
+
+
+@transaction.atomic
+def remove_payment(payment, created_by=None):
+    """Undo a payment entered by mistake; money taken from the balance goes back to it."""
+    if payment.method == Payment.Method.BALANCE:
+        credit_back(payment.booking.customer, payment.amount, booking=payment.booking, created_by=created_by, note="payment removed")
+    payment.delete()
 
 
 def _set_discount(booking, *, kind, percent=None, fixed=None, scope=Booking.DiscountScope.COURT, note=""):
@@ -187,6 +200,9 @@ def add_refund(booking, amount, method, reason="", created_by=None):
         raise BookingError("The amount must be more than zero.", "bad_amount")
     if amount > totals(booking)["refundable"]:
         raise BookingError("This is more than the customer is owed back.", "refund_too_much")
-    return Refund.objects.create(
-        booking=booking, amount=amount, method=method, reason=reason, created_by=created_by
-    )
+    with transaction.atomic():
+        if method == Payment.Method.BALANCE:
+                    credit_back(booking.customer, amount, booking=booking, created_by=created_by, note=reason)
+        return Refund.objects.create(
+            booking=booking, amount=amount, method=method, reason=reason, created_by=created_by
+        )

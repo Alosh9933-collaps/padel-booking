@@ -64,7 +64,10 @@ class Sale(models.Model):
         "clubs.Customer", null=True, blank=True, on_delete=models.SET_NULL, related_name="sales"
     )
     customer_name = models.CharField(max_length=120, blank=True)
-    method = models.CharField(max_length=10, choices=[("cash", "Cash"), ("card", "Card"), ("transfer", "Transfer")])
+    method = models.CharField(
+        max_length=10,
+        choices=[("cash", "Cash"), ("card", "Card"), ("transfer", "Transfer"), ("balance", "Balance")],
+    )
     total = models.DecimalField(max_digits=10, decimal_places=2)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"

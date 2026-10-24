@@ -176,15 +176,19 @@ def create_booking(
     )
 
 
-def change_booking(booking, *, start_at=None, end_at=None, customer_name=None, customer_phone=None):
-    """Move, extend or shorten a confirmed booking, or fix the customer details.
+def change_booking(
+    booking, *, start_at=None, end_at=None, court=None, customer_name=None, customer_phone=None
+):
+    """Move (in time or to another court), extend or shorten a confirmed booking, or fix the customer details.
 
-    A new time is re-priced with the current price rules. The overlap
-    constraint still guards the update, so extending into another booking fails.
+    A new time or court is re-priced with the current price rules. The overlap
+    constraint still guards the update, so moving into another booking fails.
     """
     if booking.status != Booking.Status.CONFIRMED:
         raise BookingError("Only a confirmed booking can be changed.", "booking_closed")
-    if booking.is_open and (start_at or end_at):
+    if court is not None and court.club_id != booking.court.club_id:
+        raise BookingError("A booking cannot move to another club.", "court_inactive")
+    if booking.is_open and (start_at or end_at or (court is not None and court != booking.court)):
         raise BookingError(
             "Open play has no end time yet. Stop it first, then change it.", "open_play_running"
         )
@@ -202,17 +206,21 @@ def change_booking(booking, *, start_at=None, end_at=None, customer_name=None, c
 
     new_start = start_at or booking.start_at
     new_end = end_at or booking.end_at
-    if (new_start, new_end) != (booking.start_at, booking.end_at):
-        validate_window(booking.court, new_start, new_end)
-        booking.start_at, booking.end_at = new_start, new_end
-        booking.price = calculate_price(booking.court, new_start, new_end)
-        fields += ["start_at", "end_at", "price"]
+    new_court = court or booking.court
+    old_court_id = booking.court_id
+    if (new_start, new_end, new_court.pk) != (booking.start_at, booking.end_at, old_court_id):
+        validate_window(new_court, new_start, new_end)
+        booking.start_at, booking.end_at, booking.court = new_start, new_end, new_court
+        booking.price = calculate_price(new_court, new_start, new_end)
+        fields += ["start_at", "end_at", "court", "price"]
 
     if not fields:
         return booking
     try:
         with transaction.atomic():
-            _lock_court(booking.court_id)
+            # Lock both courts in a fixed order, so two opposite moves cannot deadlock.
+            for court_id in sorted({old_court_id, booking.court_id}):
+                _lock_court(court_id)
             booking.save(update_fields=fields)
             refresh_discount(booking)
     except IntegrityError as exc:

@@ -57,6 +57,15 @@ class Booking(models.Model):
     )
     discount_note = models.CharField(max_length=120, blank=True)
     discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
+    class Source(models.TextChoices):
+        STAFF = "staff", "Staff"
+        ONLINE = "online", "Online"
+
+    source = models.CharField(max_length=6, choices=Source.choices, default=Source.STAFF)
+    # The customer's private link to an online booking (view and cancel).
+    public_token = models.UUIDField(null=True, blank=True, unique=True)
+    reminder_sent_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
@@ -93,6 +102,8 @@ class Payment(models.Model):
         CASH = "cash", "Cash"
         CARD = "card", "Card"
         TRANSFER = "transfer", "Transfer"
+        # Paid from the customer's prepaid balance (see the wallet app).
+        BALANCE = "balance", "Balance"
 
     booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name="payments")
     amount = models.DecimalField(max_digits=10, decimal_places=2)

@@ -42,6 +42,8 @@ INSTALLED_APPS = [
     "bookings",
     "buffet",
     "cashdesk",
+    "wallet",
+    "notify",
     "rest_framework",
     "rest_framework_simplejwt",
     "drf_spectacular",
@@ -137,9 +139,24 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "api.exceptions.api_exception_handler",
+    # Only the public booking pages are throttled; staff use the app all day.
+    "DEFAULT_THROTTLE_RATES": {
+        "public": "120/minute",
+        "public_booking": "10/hour",
+    },
 }
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Padel Booking API",
     "VERSION": "0.1.0",
+    # Payments may come from a balance; top-ups only from real money.
+    "ENUM_NAME_OVERRIDES": {
+        "PaymentMethodEnum": "bookings.models.Payment.Method",
+        "MoneyMethodEnum": [("cash", "cash"), ("card", "card"), ("transfer", "transfer")],
+    },
 }
+
+# Telegram (optional). Without a token the app works and simply sends nothing.
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "")
+

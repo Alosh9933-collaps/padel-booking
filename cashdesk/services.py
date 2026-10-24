@@ -9,6 +9,7 @@ from django.utils import timezone
 from bookings.models import Payment, Refund
 from bookings.services import BookingError
 from buffet.models import Sale
+from wallet.models import BalanceEntry
 
 from .models import Activity, Shift
 
@@ -44,12 +45,16 @@ def cash_summary(club, start, end, opening=ZERO):
     bookings_in = total(Payment.objects.filter(booking__court__club=club, method=CASH, **window), "amount")
     sales_in = total(Sale.objects.filter(club=club, method=CASH, voided_at__isnull=True, **window), "total")
     refunds_out = total(Refund.objects.filter(booking__court__club=club, method=CASH, **window), "amount")
+    topups_in = total(
+        BalanceEntry.objects.filter(club=club, kind=BalanceEntry.Kind.TOPUP, method=CASH, **window), "paid"
+    )
     return {
         "opening_cash": opening,
         "cash_bookings": bookings_in,
         "cash_sales": sales_in,
+        "cash_topups": topups_in,
         "cash_refunds": refunds_out,
-        "expected_cash": opening + bookings_in + sales_in - refunds_out,
+        "expected_cash": opening + bookings_in + sales_in + topups_in - refunds_out,
     }
 
 
