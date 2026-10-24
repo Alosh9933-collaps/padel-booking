@@ -174,6 +174,8 @@ class PublicBookingTests(GrowthTestBase):
         super().setUp()
         self.club_a.online_booking_enabled = True
         self.club_a.telegram_chat_id = "-100123"
+        # These tests are about booking itself; prepayment has its own (test_prepayment).
+        self.club_a.online_prepay_percent = 0
         self.club_a.save()
         self.client.force_authenticate(None)
         self.sent = []
@@ -199,12 +201,40 @@ class PublicBookingTests(GrowthTestBase):
         self.club_a.save()
         self.assertEqual(self.client.get(reverse("public-club", args=[self.club_a.slug])).status_code, 404)
 
-    def test_availability_hides_past_slots(self):
-        with frozen(at(2, 10, 15)):
-            data = self.client.get(reverse("public-availability", args=[self.club_a.slug]), {"date": "2026-11-02"}).data
-        slots = {s["start"][11:16]: s["available"] for s in data["courts"][0]["slots"]}
-        self.assertFalse(slots["10:30"] or slots["09:00"])
-        self.assertTrue(slots["11:30"])
+    def times(self, day="2026-11-03", minutes=60, now=None):
+        with frozen(now or at(2, 9)):
+            response = self.client.get(reverse("public-availability", args=[self.club_a.slug]), {"date": day, "minutes": minutes})
+        if response.status_code != 200:
+            return response
+        return {t["start"][11:16]: (t["end"][11:16], Decimal(t["price"])) for t in response.data["courts"][0]["times"]}
+
+    def test_availability_hides_past_and_booked_times(self):
+        times = self.times(day="2026-11-02", now=at(2, 10, 15))
+        self.assertNotIn("09:00", times)  # already started
+        self.assertNotIn("10:30", times)  # overlaps the 10:00-11:00 booking
+        self.assertIn("11:00", times)
+
+    def test_any_length_in_steps_of_ten_with_the_exact_price(self):
+        times = self.times(minutes=70)
+        self.assertEqual(times["08:00"], ("09:10", Decimal("2333.33")))
+        # 30 minutes at 2000/h, then 40 at 3000/h.
+        self.assertEqual(times["16:30"], ("17:40", Decimal("3000.00")))
+        self.assertNotIn("23:00", times)  # would run past closing
+
+    def test_the_gap_after_an_odd_length_game_is_offered(self):
+        create_booking(court=self.court_a, start_at=at(3, 8), end_at=at(3, 9, 10), customer_name="Staff")
+        times = self.times()
+        self.assertNotIn("09:00", times)
+        self.assertEqual(times["09:10"][0], "10:10")
+
+    def test_lengths_outside_the_rules_are_refused(self):
+        for minutes in (50, 65, 250):
+            self.assertEqual(self.times(minutes=minutes).data["code"], "bad_online_length")
+        self.assertEqual(self.book(end="2026-11-03T18:45:00+03:00").data["code"], "bad_online_length")
+        late = self.book(start="2026-11-03T18:05:00+03:00", end="2026-11-03T19:15:00+03:00")
+        self.assertEqual(late.data["code"], "bad_online_start")
+        ok = self.book(end="2026-11-03T19:10:00+03:00")
+        self.assertEqual((ok.status_code, Decimal(ok.data["price"])), (201, Decimal("3500.00")))
 
     def test_book_online_then_cancel(self):
         created = self.book()

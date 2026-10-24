@@ -139,6 +139,10 @@ def add_payment(booking, amount, method, payer_name="", created_by=None):
         raise BookingError("This is more than what is left to pay.", "overpayment")
     if method == Payment.Method.BALANCE:
         spend(booking.customer, amount, kind="payment", booking=booking, created_by=created_by)
+    # Money in, from anywhere, makes an online hold a real booking: it must not run out any more.
+    if booking.hold_until is not None:
+        booking.hold_until = None
+        booking.save(update_fields=["hold_until"])
     return Payment.objects.create(
         booking=booking, amount=amount, method=method, payer_name=payer_name, created_by=created_by
     )

@@ -65,6 +65,8 @@ class Booking(models.Model):
     source = models.CharField(max_length=6, choices=Source.choices, default=Source.STAFF)
     # The customer's private link to an online booking (view and cancel).
     public_token = models.UUIDField(null=True, blank=True, unique=True)
+    # An online booking waiting for its prepayment holds the court until then (see the payments app).
+    hold_until = models.DateTimeField(null=True, blank=True)
     reminder_sent_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
@@ -104,6 +106,8 @@ class Payment(models.Model):
         TRANSFER = "transfer", "Transfer"
         # Paid from the customer's prepaid balance (see the wallet app).
         BALANCE = "balance", "Balance"
+        # Prepaid on the online booking page, through the payment provider (see the payments app).
+        ONLINE = "online", "Online"
 
     booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name="payments")
     amount = models.DecimalField(max_digits=10, decimal_places=2)

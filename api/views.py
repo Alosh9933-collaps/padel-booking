@@ -46,6 +46,7 @@ from buffet.models import BookingItem, Sale
 from cashdesk.services import record
 from clubs.access import can_manage, clubs_of, managed_clubs_of
 from clubs.models import Club, Court, DiscountSettings, Membership, PriceRule
+from payments.services import release_expired_holds
 
 from .serializers import (
     AvailabilitySerializer,
@@ -291,6 +292,11 @@ class BookingViewSet(
                     match |= Q(customer_phone__contains=digits) | Q(customer__phone__contains=digits)
                 return qs.filter(match).order_by("-start_at")[:30]
         return qs.order_by("start_at")
+
+    def list(self, request, *args, **kwargs):
+        # Courts held by online bookings that were never paid are free again before the day is shown.
+        release_expired_holds()
+        return super().list(request, *args, **kwargs)
 
     def log(self, booking, action, amount=None, **data):
         """One line in the club's activity log, about this booking."""

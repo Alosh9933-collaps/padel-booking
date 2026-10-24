@@ -48,6 +48,10 @@ class Club(models.Model):
     online_cancel_hours = models.PositiveSmallIntegerField(
         default=12, validators=[MaxValueValidator(168)], help_text="Customers can cancel up to this many hours before"
     )
+    # Online bookings are paid up front (this share of the price), so nobody can hold courts for free.
+    online_prepay_percent = models.PositiveSmallIntegerField(
+        default=100, validators=[MaxValueValidator(100)], help_text="Share of the price paid online when booking; 0 = none"
+    )
     # Telegram: the staff group that hears about online bookings, and the
     # language of messages sent to customers.
     telegram_chat_id = models.CharField(max_length=40, blank=True)
@@ -96,6 +100,8 @@ class Membership(models.Model):
     )
     club = models.ForeignKey(Club, on_delete=models.CASCADE, related_name="memberships")
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.RECEPTIONIST)
+    # Notifications newer than this are unread for this staff member.
+    notifications_seen_at = models.DateTimeField(null=True, blank=True)
  
     class Meta:
         constraints = [

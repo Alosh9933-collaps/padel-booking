@@ -18,6 +18,7 @@ def send_due_reminders(hours=2):
     due = (
         Booking.objects.filter(
             status=Booking.Status.CONFIRMED,
+            hold_until__isnull=True,  # not while it waits for its prepayment
             reminder_sent_at__isnull=True,
             start_at__gt=now,
             start_at__lte=now + timedelta(hours=hours),

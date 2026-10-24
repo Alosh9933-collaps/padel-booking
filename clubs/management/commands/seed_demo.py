@@ -28,6 +28,8 @@ from bookings.services import BookingError, cancel_booking, create_booking, crea
 from buffet.models import Product, Sale
 from buffet.sales import create_sale
 from clubs.models import Club, Court, Customer, CustomerCategory, DiscountSettings, Membership, PriceRule
+from payments import providers
+from payments import services as prepay
 from wallet.models import BalanceEntry, TopUpPlan
 from wallet.services import balance_of, top_up
 
@@ -203,6 +205,11 @@ class Command(BaseCommand):
             booking.source = Booking.Source.ONLINE
             booking.public_token = uuid.uuid4()
             booking.save(update_fields=["source", "public_token"])
+            # Prepaid on the demo payment page, which also notified the staff.
+            if providers.active():
+                booking.hold_until = prepay.hold_until()
+                booking.save(update_fields=["hold_until"])
+                prepay.succeeded(prepay.start(booking, return_url=f"/b/{booking.public_token.hex}"))
 
         topups = {offset: (name, plan, method) for offset, name, plan, method in TOPUPS}
         open_now = club.opening_hour <= now.astimezone(tz).hour < club.closing_hour - 1

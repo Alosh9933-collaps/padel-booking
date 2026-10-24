@@ -8,6 +8,7 @@ from bookings.discounts import offers
 from bookings.models import Booking, Payment, Refund
 from buffet.models import BookingItem, Product, Sale, SaleItem
 from cashdesk.models import Activity, Shift
+from payments import providers
 from wallet.models import BalanceEntry, TopUpPlan
 from wallet.services import balance_of
 from clubs.access import clubs_of
@@ -21,6 +22,9 @@ from clubs.models import (
     PriceRule,
     normalize_phone,
 )
+
+# What staff take at the desk. Online prepayments only come through the payment provider.
+STAFF_METHODS = [(value, label) for value, label in Payment.Method.choices if value != Payment.Method.ONLINE]
 
 
 def _user_from(serializer):
@@ -104,6 +108,9 @@ class PriceRuleSerializer(serializers.ModelSerializer):
 
 class ClubSerializer(serializers.ModelSerializer):
     role = serializers.CharField(read_only=True, help_text="Your role in this club.")
+    payments_provider = serializers.SerializerMethodField(
+        help_text="Who takes online prepayments: yookassa, demo (testing only) or null (not set up)."
+    )
 
     class Meta:
         model = Club
@@ -120,11 +127,17 @@ class ClubSerializer(serializers.ModelSerializer):
             "online_booking_enabled",
             "online_days_ahead",
             "online_cancel_hours",
+            "online_prepay_percent",
+            "payments_provider",
             "telegram_chat_id",
             "language",
         )
         # Changing the slot grid would leave existing bookings off-grid.
-        read_only_fields = ("id", "name", "currency", "slot_minutes", "role")
+        read_only_fields = ("id", "name", "currency", "slot_minutes", "role", "payments_provider")
+
+    def get_payments_provider(self, _club) -> str | None:
+        provider = providers.active()
+        return provider.name if provider else None
 
     def validate_slug(self, slug):
         if not slug:
@@ -236,6 +249,7 @@ BOOKING_FIELDS = (
     "discount_note",
     "discount",
     "source",
+    "hold_until",
     "created_at",
     "cancelled_at",
     "court_total",
@@ -286,6 +300,8 @@ class RefundSerializer(serializers.ModelSerializer):
 
 
 class RefundAddSerializer(serializers.ModelSerializer):
+    method = serializers.ChoiceField(choices=STAFF_METHODS)
+
     class Meta:
         model = Refund
         fields = ("amount", "method", "reason")
@@ -404,6 +420,8 @@ class ItemQuantitySerializer(serializers.Serializer):
 
 
 class PaymentAddSerializer(serializers.ModelSerializer):
+    method = serializers.ChoiceField(choices=STAFF_METHODS)
+
     class Meta:
         model = Payment
         fields = ("amount", "method", "payer_name")
@@ -637,7 +655,7 @@ class SaleLineSerializer(serializers.Serializer):
 class SaleCreateSerializer(serializers.Serializer):
     club = serializers.PrimaryKeyRelatedField(queryset=Club.objects.none())
     items = SaleLineSerializer(many=True)
-    method = serializers.ChoiceField(choices=Payment.Method.choices)
+    method = serializers.ChoiceField(choices=STAFF_METHODS)
     customer_name = serializers.CharField(max_length=120, required=False, allow_blank=True, default="")
     customer_phone = serializers.CharField(max_length=32, required=False, allow_blank=True, default="")
 

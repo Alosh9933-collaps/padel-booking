@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "cashdesk",
     "wallet",
     "notify",
+    "payments",
     "rest_framework",
     "rest_framework_simplejwt",
     "drf_spectacular",
@@ -153,6 +154,7 @@ SPECTACULAR_SETTINGS = {
     # Payments may come from a balance; top-ups only from real money.
     "ENUM_NAME_OVERRIDES": {
         "PaymentMethodEnum": "bookings.models.Payment.Method",
+        "StaffMethodEnum": "api.serializers.STAFF_METHODS",
         "MoneyMethodEnum": [("cash", "cash"), ("card", "card"), ("transfer", "transfer")],
     },
 }
@@ -160,4 +162,12 @@ SPECTACULAR_SETTINGS = {
 # Telegram (optional). Without a token the app works and simply sends nothing.
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "")
+
+# Online prepayment (see payments.providers). YooKassa when both keys are set;
+# otherwise the demo payment page, which moves no money and is never for production.
+YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID", "")
+YOOKASSA_SECRET_KEY = os.environ.get("YOOKASSA_SECRET_KEY", "")
+PAYMENTS_DEMO = os.environ.get("PAYMENTS_DEMO", "1" if DEBUG else "0") == "1"
+# Where customers come back after paying, e.g. https://padel.example.com (defaults to the request's host).
+PUBLIC_SITE_URL = os.environ.get("PUBLIC_SITE_URL", "").rstrip("/")
 

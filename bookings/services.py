@@ -92,13 +92,20 @@ def _pick_rule(rules, court, local_moment):
     return max(matching, key=lambda r: (r.priority, r.court_id == court.pk))
 
 
-def calculate_price(court, start_at, end_at):
-    """Price by the minute. Rules cover whole hours, so the range is walked hour by hour."""
+def court_price_rules(court):
+    """The price rules that can apply to a court: its own and the club-wide ones."""
+    return list(PriceRule.objects.filter(club=court.club).filter(Q(court=court) | Q(court__isnull=True)))
+
+
+def calculate_price(court, start_at, end_at, rules=None):
+    """Price by the minute. Rules cover whole hours, so the range is walked hour by hour.
+
+    Pass `rules` (from court_price_rules) to price many ranges with one query.
+    """
     club = court.club
     tz = ZoneInfo(club.timezone)
-    rules = list(
-        PriceRule.objects.filter(club=club).filter(Q(court=court) | Q(court__isnull=True))
-    )
+    if rules is None:
+        rules = court_price_rules(court)
 
     total = Decimal("0")
     cursor = start_at

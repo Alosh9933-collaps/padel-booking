@@ -294,8 +294,9 @@ class DailyReportView(APIView):
         paid_by, refunded_by, sold_by = by(payments, "amount"), by(refunds, "amount"), by(sales, "total")
         topped_by = by(topups, "paid")
         by_method = []
-        # Money that really came in or went out. Balance spending is not new money.
-        for method in ("cash", "card", "transfer"):
+        # Money that really came in or went out. Balance spending is not new money;
+        # online prepayments are, but they land with the payment provider, not in the drawer.
+        for method in ("cash", "card", "transfer", "online"):
             paid, n_paid = paid_by.get(method, (ZERO, 0))
             sold, n_sold = sold_by.get(method, (ZERO, 0))
             topped, n_topped = topped_by.get(method, (ZERO, 0))
@@ -327,7 +328,8 @@ class DailyReportView(APIView):
         )
         unpaid = [
             b
-            for b in with_totals(bookings.filter(status=Booking.Status.CONFIRMED, is_open=False))
+            # An online booking still waiting for its prepayment is not owed at the desk.
+            for b in with_totals(bookings.filter(status=Booking.Status.CONFIRMED, is_open=False, hold_until__isnull=True))
             .select_related("court")
             .order_by("start_at")
             if totals(b)["balance"] > 0

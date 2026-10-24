@@ -3,12 +3,15 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from .dashboard import DashboardView
+from .notifications import NotificationListView, NotificationSeenView
 from .public import (
+    DemoPaymentView,
     PublicAvailabilityView,
     PublicBookingCancelView,
     PublicBookingCreateView,
     PublicBookingView,
     PublicClubView,
+    YooKassaWebhookView,
 )
 from .operations import (
     ActivityViewSet,
@@ -54,5 +57,9 @@ urlpatterns = [
     path("public/clubs/<slug:slug>/bookings/", PublicBookingCreateView.as_view(), name="public-booking-create"),
     path("public/bookings/<str:token>/", PublicBookingView.as_view(), name="public-booking"),
     path("public/bookings/<str:token>/cancel/", PublicBookingCancelView.as_view(), name="public-booking-cancel"),
+    path("public/payments/yookassa/", YooKassaWebhookView.as_view(), name="yookassa-webhook"),
+    path("public/payments/<str:payment_id>/demo/", DemoPaymentView.as_view(), name="demo-payment"),
+    path("notifications/", NotificationListView.as_view(), name="notifications"),
+    path("notifications/seen/", NotificationSeenView.as_view(), name="notifications-seen"),
     path("", include(router.urls)),
 ]
