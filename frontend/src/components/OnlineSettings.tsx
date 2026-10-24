@@ -13,6 +13,7 @@ export function OnlineSettings() {
   const [slug, setSlug] = useState(club.slug);
   const [daysAhead, setDaysAhead] = useState(club.online_days_ahead);
   const [cancelHours, setCancelHours] = useState(club.online_cancel_hours);
+  const [prepay, setPrepay] = useState(club.online_prepay_percent);
   const [chatId, setChatId] = useState(club.telegram_chat_id);
   const [language, setLanguage] = useState<Club["language"]>(club.language);
   const [copied, setCopied] = useState(false);
@@ -25,6 +26,7 @@ export function OnlineSettings() {
     slug !== club.slug ||
     daysAhead !== club.online_days_ahead ||
     cancelHours !== club.online_cancel_hours ||
+    prepay !== club.online_prepay_percent ||
     chatId !== club.telegram_chat_id ||
     language !== club.language;
 
@@ -38,6 +40,7 @@ export function OnlineSettings() {
         slug: slug.trim().toLowerCase(),
         online_days_ahead: daysAhead,
         online_cancel_hours: cancelHours,
+        online_prepay_percent: prepay,
         telegram_chat_id: chatId.trim(),
         language,
       });
@@ -104,6 +107,31 @@ export function OnlineSettings() {
             <input type="number" min={0} max={168} value={cancelHours} disabled={!canManage} onChange={(e) => setCancelHours(Number(e.target.value))} />
           </label>
         </div>
+
+        <h3 className="sub-head">💳 {t("prepay.title")}</h3>
+        <p className="hint">{t("prepay.hint")}</p>
+        <div className="field-row">
+          <label className="field">
+            <span>{t("prepay.percent")}</span>
+            <div className="suffixed" dir="ltr">
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={5}
+                value={prepay}
+                disabled={!canManage}
+                onChange={(e) => setPrepay(Math.max(0, Math.min(100, Number(e.target.value))))}
+              />
+              <em>%</em>
+            </div>
+          </label>
+          <div className={`provider-state provider-${club.payments_provider ?? "none"}`}>
+            <strong>{t(`prepay.provider.${club.payments_provider ?? "none"}`)}</strong>
+            <small>{t(`prepay.providerHint.${club.payments_provider ?? "none"}`)}</small>
+          </div>
+        </div>
+        {prepay === 0 && <p className="note">{t("prepay.offWarning")}</p>}
 
         <h3 className="sub-head">✈ {t("telegram.title")}</h3>
         <p className="hint">{t("telegram.hint")}</p>

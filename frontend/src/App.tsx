@@ -13,6 +13,7 @@ import {
 } from "./api";
 import { CourtArt, Logo } from "./components/Brand";
 import { LanguageSwitch } from "./components/LanguageSwitch";
+import { NotificationCenter } from "./components/Notifications";
 import { errorText, useI18n } from "./i18n";
 import ActivityLog from "./pages/ActivityLog";
 import Courts from "./pages/Courts";
@@ -22,7 +23,7 @@ import Daily from "./pages/Daily";
 import Login from "./pages/Login";
 import Menu from "./pages/Menu";
 import Prices from "./pages/Prices";
-import { PublicBookingLink, PublicBookingPage } from "./pages/PublicBooking";
+import { DemoPaymentPage, PublicBookingLink, PublicBookingPage } from "./pages/PublicBooking";
 import Revenue from "./pages/Revenue";
 import Schedule from "./pages/Schedule";
 import Settings from "./pages/Settings";
@@ -40,11 +41,12 @@ export default function App() {
   }, []);
 
   // Customers' pages: no login, no staff shell.
-  if (pathname.startsWith("/book/") || pathname.startsWith("/b/")) {
+  if (pathname.startsWith("/book/") || pathname.startsWith("/b/") || pathname.startsWith("/pay/")) {
     return (
       <Routes>
         <Route path="/book/:slug" element={<PublicBookingPage />} />
         <Route path="/b/:token" element={<PublicBookingLink />} />
+        <Route path="/pay/demo/:id" element={<DemoPaymentPage />} />
       </Routes>
     );
   }
@@ -131,7 +133,10 @@ function Shell({ onLogout }: { onLogout: () => void }) {
       <div className="shell">
         <aside className="sidebar">
           <div className="sidebar-top">
-            <Logo size={38} light />
+            <div className="brand-row">
+              <Logo size={38} light />
+              <NotificationCenter key={value.club.id} />
+            </div>
             {clubs.length > 1 ? (
               <select
                 className="club-switch"

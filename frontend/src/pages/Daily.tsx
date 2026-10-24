@@ -81,7 +81,8 @@ export default function Daily() {
               <strong className="stat-value">{money(report.received, report.currency)}</strong>
               <span className="stat-sub">{t("daily.receivedHint")}</span>
             </div>
-            {METHODS.map((m) => (
+            {/* Online prepayments land with the payment provider; they show only on days that had some. */}
+            {(Number(byMethod("online")?.total ?? 0) ? [...METHODS, "online" as const] : METHODS).map((m) => (
               <div key={m} className="stat">
                 <span className="stat-label">{t(`method.${m}`)}</span>
                 <strong className="stat-value">{money(byMethod(m)?.total ?? 0, report.currency)}</strong>

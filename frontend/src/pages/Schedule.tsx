@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { Api, type Booking, type Court, type Slot, type WeeklyWeek } from "../api";
 import { BillModal, localIso } from "../components/Bill";
 import { BookingSearch } from "../components/BookingSearch";
 import { CustomerFields } from "../components/CustomerField";
 import { Modal } from "../components/Modal";
+import { BOOKINGS_CHANGED } from "../components/Notifications";
 import { addDays, clockTime, dateIn, ltr, duration, longDate, money, shortDate, timeRange, todayIn } from "../format";
 import { errorText, useT } from "../i18n";
 import { useClub, useToast } from "../session";
@@ -103,6 +105,24 @@ export default function Schedule() {
 
   const reload = () => setVersion((v) => v + 1);
   const today = todayIn(club.timezone);
+
+  // A notification links here as /?date=…&booking=…: show that day and open the bill.
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const booking = Number(params.get("booking"));
+    const day = params.get("date");
+    if (!booking || !day) return;
+    setDate(day);
+    setOpened(booking);
+    setParams({}, { replace: true });
+  }, [params, setParams]);
+
+  // Online bookings arrive while the page is open.
+  useEffect(() => {
+    const onChange = () => setVersion((v) => v + 1);
+    window.addEventListener(BOOKINGS_CHANGED, onChange);
+    return () => window.removeEventListener(BOOKINGS_CHANGED, onChange);
+  }, []);
   const timeline = data && data.courts.length ? timelineOf(data.slots[data.courts[0].id] ?? []) : null;
   const dayIsOver = timeline !== null && timeline.end - MINUTE <= now;
   const clubIsOpenNow =
@@ -459,7 +479,7 @@ function CourtColumn({
               </button>
             )}
             <button
-              className={`booking${b.is_open ? " is-live" : ""}${!b.is_open && end <= now ? " is-past" : ""}${due ? " is-due" : ""}${movable ? " is-movable" : ""}${dragging ? " is-dragging" : ""}`}
+              className={`booking${b.is_open ? " is-live" : ""}${!b.is_open && end <= now ? " is-past" : ""}${due ? " is-due" : ""}${b.hold_until ? " is-awaiting" : ""}${movable ? " is-movable" : ""}${dragging ? " is-dragging" : ""}`}
               style={{ top, height }}
               // Mouse and touch go through the drag handlers; keyboard "clicks" (detail 0) open the bill.
               onClick={(e) => (e.detail === 0 || !movable) && onOpen(b)}
@@ -469,6 +489,9 @@ function CourtColumn({
               <strong>
                 {b.is_open && <span className="live-dot" aria-hidden />}
                 {b.source === "online" && <span title={t("schedule.online")}>🌐</span>}
+                {b.hold_until && (
+                  <span title={t("schedule.awaitingTitle", { time: clockTime(b.hold_until, club.timezone) })}>⏳</span>
+                )}
                 {b.series && <span aria-label={t("bill.weekly")}>↻</span>}
                 {b.customer_name}
               </strong>
@@ -482,7 +505,7 @@ function CourtColumn({
               {tall && !b.is_open && (
                 <span className="cell-price">
                   {money(b.total, club.currency)}
-                  {due && <em>{t(`pay.${b.payment_status}`)}</em>}
+                  {due && <em>{b.hold_until ? t("schedule.awaiting") : t(`pay.${b.payment_status}`)}</em>}
                 </span>
               )}
               {movable && (

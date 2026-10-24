@@ -28,9 +28,14 @@ It is designed around the daily work of a real club in Russia: walk-in players w
 - Owner dashboard: this month against the same days of last month, a heatmap of busy and quiet hours over 8 weeks, best customers, and the last 6 months.
 
 **Players online**
-- A public page per club (`/book/<club>`): choose a day, a duration and a free time, no account needed. The club sets how many days ahead and the cancellation window. Each phone number can hold at most 3 upcoming online bookings, and the endpoints are rate limited.
-- Each booking gets a private link to view or cancel it.
-- Telegram: the club gets an alert for every online booking. Players who open the bot link get a confirmation and a reminder before the game.
+- A public page per club (`/book/<club>`), no account needed. Players choose a day, any length from 60 minutes in steps of 10, and a free time with its exact price. The club sets how many days ahead and the cancellation window. Each phone number can hold at most 3 upcoming online bookings, and the endpoints are rate limited.
+- Prepayment: an online booking is only confirmed once it is paid (YooKassa, or a demo payment page for testing). The club chooses how much is paid up front.
+  - While the player pays, the court is held for 15 minutes. An unpaid hold frees itself.
+  - A payment that arrives too late is refunded automatically, and so is the prepayment when a player cancels in time.
+- Each booking gets a private link to view, pay or cancel it.
+- Staff see every new online booking at once:
+  - In the admin site, as a pop-up with the details, a sound and a bell with an unread count. It also shows as a system notification when the tab is in the background.
+  - In their Telegram group. Players who open the bot link get a confirmation and a reminder before the game.
 
 ## Screenshots
 
@@ -51,6 +56,12 @@ It is designed around the daily work of a real club in Russia: walk-in players w
 
 - **Double bookings are impossible at the database level.** A PostgreSQL exclusion constraint forbids two confirmed bookings whose time ranges overlap on the same court. A per-court advisory lock makes concurrent requests wait their turn, so the loser gets a clean "slot taken" answer (HTTP 409) instead of a database error. Moving a booking to another court locks both courts in a fixed order, so two moves cannot deadlock.
 - **Money is `Decimal` everywhere, and prices are frozen on the booking.** Changing the price list never changes past bills. Prices are worked out minute by minute across hourly rules (weekday, evening, weekend), so a game from 16:30 to 18:00 is charged at both rates.
+- **Online prepayment cannot charge twice or lose money:**
+  - Every step (start, paid, not paid, hold ran out) can safely run again. Each one locks the payment row, then the booking row.
+  - The YooKassa webhook body is never trusted: the status is always asked from YooKassa itself.
+  - Payments and refunds carry idempotence keys.
+  - Unpaid holds are released by a cron command, and also whenever someone looks at the schedule or the booking page.
+- **Free times for any length are worked out on the server**, priced by the minute. Start times include the gap right after an odd-length game, not just the half-hour grid.
 - **The prepaid balance is a ledger, not a number.** Every top-up, payment, sale and refund is a row. Spending locks the customer row (`SELECT … FOR UPDATE`), so two desks cannot spend the same credit. Cash-up counts a top-up as new money and a balance payment as not.
 - **Every query is scoped to the user's clubs** through one helper. It also avoids the Django trap where two chained `filter()` calls on memberships could let a receptionist pass as a manager.
 - **The public API is hardened:** no login, but throttled per IP, with an explicit consent checkbox and unguessable UUID links. An invalid link returns 404 and never matches staff bookings, which have no link.
@@ -58,7 +69,7 @@ It is designed around the daily work of a real club in Russia: walk-in players w
 - **Right to left done properly:** logical CSS properties, and Unicode isolates for times, phone numbers and minus signs inside Arabic text, so "18:30–20:00" never comes out reversed.
 - **Query performance:** the customer list builds visits, money spent and balance with per-customer subqueries. On 2,000 bookings that took the query from 1.1 s to 20 ms.
 - **Telegram with no extra infrastructure:** a long-polling bot as a management command, and messages sent only after the database transaction commits.
-- **Tests:** 156 backend tests on PostgreSQL. They cover overlaps and concurrent requests, permissions per role, money edge cases, the wallet, the dashboard and the public API.
+- **Tests:** 172 backend tests on PostgreSQL. They cover overlaps and concurrent requests, permissions per role, money edge cases, the wallet, the dashboard, the public API, and prepayment, including late payments, refunds and YooKassa with mocked network calls.
 
 ## Tech stack
 
@@ -91,7 +102,14 @@ npm run dev                          # app on http://localhost:5173
 - API docs (Swagger): http://127.0.0.1:8000/api/docs/
 - Tests: `python manage.py test` (the database must be running)
 
-Telegram is optional. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_BOT_USERNAME`, run `python manage.py telegram_bot`, and run `python manage.py send_reminders` every few minutes. Production settings come from environment variables listed in [.env.example](.env.example).
+Online prepayment uses a demo payment page in development, so the whole flow can be tried without real money. For real payments:
+- Set `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY` and `PUBLIC_SITE_URL`.
+- Point the YooKassa webhook to `/api/public/payments/yookassa/`.
+- Run `python manage.py release_holds` every minute.
+
+Telegram is optional. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_BOT_USERNAME`, run `python manage.py telegram_bot`, and run `python manage.py send_reminders` every few minutes.
+
+Production settings come from the environment variables listed in [.env.example](.env.example).
 
 ## Project structure
 
@@ -102,12 +120,13 @@ buffet/     products, items on a bill, counter sales
 cashdesk/   shifts and the activity log
 clubs/      clubs, courts, price rules, staff roles, customers, the demo seeder
 wallet/     prepaid packages and the balance ledger
-notify/     Telegram messages, the bot and reminders
+payments/   online prepayment: YooKassa and the demo provider, holds, refunds
+notify/     staff notifications, Telegram messages, the bot and reminders
 frontend/   React app: the staff app and the public booking page
 ```
 
 ## Next steps
 
 - Deployment: Docker image, nginx and HTTPS
-- Online payment for online bookings
+- Fiscal receipts (54-FZ) through YooKassa
 - One database per club, to offer it to other clubs

@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { PublicApi, type PublicAvailability, type PublicBooking as Booked, type PublicClub } from "../api";
+import { PublicApi, type DemoPayment, type PublicAvailability, type PublicBooking as Booked, type PublicClub } from "../api";
 import { CourtArt, Logo } from "../components/Brand";
 import { LanguageSwitch } from "../components/LanguageSwitch";
-import { addDays, clockTime, dateIn, dateTime, longDate, ltr, money, timeRange, weekdayNames } from "../format";
+import { addDays, clockTime, dateIn, dateTime, duration, isolate, longDate, ltr, money, timeRange, weekdayNames } from "../format";
 import { errorText, useT } from "../i18n";
-
-const DURATIONS = [60, 90, 120];
 
 interface Option {
   courtId: number;
@@ -17,26 +15,67 @@ interface Option {
   price: number;
 }
 
-/** Start times on each court where `minutes` of free, priced slots follow each other. */
-function options(availability: PublicAvailability, slotMinutes: number, minutes: number): Option[] {
-  const count = minutes / slotMinutes;
-  const out: Option[] = [];
-  for (const court of availability.courts) {
-    for (let i = 0; i + count <= court.slots.length; i++) {
-      const run = court.slots.slice(i, i + count);
-      const free = run.every((s, k) => s.available && s.price !== null && (k === 0 || run[k - 1].end === s.start));
-      if (free) {
-        out.push({
-          courtId: court.id,
-          courtName: court.name,
-          start: run[0].start,
-          end: run[run.length - 1].end,
-          price: run.reduce((sum, s) => sum + Number(s.price), 0),
-        });
-      }
-    }
-  }
-  return out;
+function options(availability: PublicAvailability): Option[] {
+  return availability.courts.flatMap((court) =>
+    court.times.map((time) => ({ courtId: court.id, courtName: court.name, start: time.start, end: time.end, price: Number(time.price) })),
+  );
+}
+
+function validLength(club: PublicClub, minutes: number) {
+  return Number.isInteger(minutes) && minutes >= club.min_minutes && minutes <= club.max_minutes && minutes % club.step_minutes === 0;
+}
+
+/** Any length the club allows: typed in, or stepped up and down. */
+function LengthPicker({ club, value, onChange }: { club: PublicClub; value: string; onChange: (value: string) => void }) {
+  const t = useT();
+  const minutes = Number(value);
+  const valid = validLength(club, minutes);
+  const step = (delta: number) => {
+    const base = minutes > 0 ? Math.round(minutes / club.step_minutes) * club.step_minutes : club.min_minutes;
+    onChange(String(Math.min(club.max_minutes, Math.max(club.min_minutes, base + delta))));
+  };
+  return (
+    <>
+      <div className="length-picker">
+        <button
+          type="button"
+          className="btn"
+          onClick={() => step(-club.step_minutes)}
+          disabled={valid && minutes <= club.min_minutes}
+          aria-label={t("public.lessTime", { step: club.step_minutes })}
+        >
+          −
+        </button>
+        <label className="length-field">
+          <input
+            type="number"
+            inputMode="numeric"
+            min={club.min_minutes}
+            max={club.max_minutes}
+            step={club.step_minutes}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            aria-label={t("public.pickLength")}
+            aria-invalid={!valid}
+          />
+          <span>{t("booking.min")}</span>
+        </label>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => step(club.step_minutes)}
+          disabled={valid && minutes >= club.max_minutes}
+          aria-label={t("public.moreTime", { step: club.step_minutes })}
+        >
+          +
+        </button>
+        {valid && <span className="length-total">= {duration(minutes * 60_000)}</span>}
+      </div>
+      <p className={`hint length-hint${valid ? "" : " is-bad"}`}>
+        {t("public.lengthHint", { min: club.min_minutes, max: club.max_minutes, step: club.step_minutes })}
+      </p>
+    </>
+  );
 }
 
 function Frame({ title, children }: { title?: string; children: React.ReactNode }) {
@@ -58,6 +97,8 @@ export function PublicBookingPage() {
   const { slug = "" } = useParams();
   const [club, setClub] = useState<PublicClub | null>(null);
   const [date, setDate] = useState("");
+  // What the customer typed, and the last valid length the free times are for.
+  const [draft, setDraft] = useState("90");
   const [minutes, setMinutes] = useState(90);
   const [availability, setAvailability] = useState<PublicAvailability | null>(null);
   const [choice, setChoice] = useState<Option | null>(null);
@@ -70,29 +111,34 @@ export function PublicBookingPage() {
       .then((c) => {
         setClub(c);
         setDate(c.today);
-        if (c.slot_minutes === 60) setMinutes(60);
       })
       .catch(() => setMissing(true));
   }, [slug]);
+
+  // Wait until the customer stops typing before asking for times.
+  useEffect(() => {
+    const typed = Number(draft);
+    if (!club || !validLength(club, typed)) return;
+    const timer = window.setTimeout(() => setMinutes(typed), 350);
+    return () => window.clearTimeout(timer);
+  }, [club, draft]);
 
   useEffect(() => {
     if (!club || !date) return;
     setAvailability(null);
     setChoice(null);
-    PublicApi.availability(slug, date)
+    setError(null);
+    PublicApi.availability(slug, date, minutes)
       .then(setAvailability)
       .catch((e) => setError(errorText(e, t)));
-  }, [club, slug, date, t]);
+  }, [club, slug, date, minutes, t]);
 
   const days = useMemo(
     () => (club ? Array.from({ length: club.days_ahead + 1 }, (_, i) => addDays(club.today, i)) : []),
     [club],
   );
   const names = weekdayNames();
-  const found = useMemo(
-    () => (availability && club ? options(availability, club.slot_minutes, minutes) : []),
-    [availability, club, minutes],
-  );
+  const found = useMemo(() => (availability ? options(availability) : []), [availability]);
   const byCourt = useMemo(() => {
     const map = new Map<string, Option[]>();
     for (const o of found) map.set(o.courtName, [...(map.get(o.courtName) ?? []), o]);
@@ -112,6 +158,10 @@ export function PublicBookingPage() {
   if (!club) return <Frame>{null}</Frame>;
 
   if (booked) return <Frame title={club.name}><BookedCard booked={booked} /></Frame>;
+
+  // Times show once they match the length typed in; an invalid length only shows the hint.
+  const typedValid = validLength(club, Number(draft));
+  const ready = typedValid && Number(draft) === minutes && availability !== null;
 
   return (
     <Frame title={club.name}>
@@ -138,18 +188,12 @@ export function PublicBookingPage() {
         </div>
 
         <h2 className="step">2 · {t("public.pickLength")}</h2>
-        <div className="segmented">
-          {DURATIONS.filter((m) => m % club.slot_minutes === 0).map((m) => (
-            <button key={m} className={m === minutes ? "on" : ""} onClick={() => setMinutes(m)}>
-              {m} {t("booking.min")}
-            </button>
-          ))}
-        </div>
+        <LengthPicker club={club} value={draft} onChange={setDraft} />
 
         <h2 className="step">3 · {t("public.pickTime", { date: longDate(date) })}</h2>
-        {!availability && <p className="muted">{t("common.loading")}</p>}
-        {availability && found.length === 0 && <p className="muted">{t("public.noTimes")}</p>}
-        {byCourt.map(([court, list]) => (
+        {typedValid && !ready && <p className="muted">{t("common.loading")}</p>}
+        {ready && found.length === 0 && <p className="muted">{t("public.noTimes")}</p>}
+        {ready && byCourt.map(([court, list]) => (
           <div key={court} className="time-group">
             <h3>{court}</h3>
             <div className="time-grid">
@@ -168,7 +212,7 @@ export function PublicBookingPage() {
         ))}
       </section>
 
-      {choice && <BookForm club={club} choice={choice} onBooked={setBooked} />}
+      {choice && ready && <BookForm club={club} choice={choice} onBooked={setBooked} />}
       {error && <div className="alert">{error}</div>}
     </Frame>
   );
@@ -181,22 +225,26 @@ function BookForm({ club, choice, onBooked }: { club: PublicClub; choice: Option
   const [consent, setConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // What is paid now; the server works out the exact amount the same way.
+  const prepay = Math.round(choice.price * club.prepay_percent) / 100;
+  const rest = choice.price - prepay;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      onBooked(
-        await PublicApi.book(club.slug, {
-          court: choice.courtId,
-          start_at: choice.start,
-          end_at: choice.end,
-          customer_name: name.trim(),
-          customer_phone: phone.trim(),
-          consent,
-        }),
-      );
+      const booked = await PublicApi.book(club.slug, {
+        court: choice.courtId,
+        start_at: choice.start,
+        end_at: choice.end,
+        customer_name: name.trim(),
+        customer_phone: phone.trim(),
+        consent,
+      });
+      // The court is held while the customer pays on the payment page, which brings them back to /b/<token>.
+      if (booked.awaiting_payment && booked.payment_url) window.location.assign(booked.payment_url);
+      else onBooked(booked);
     } catch (err) {
       setError(errorText(err, t));
       setBusy(false);
@@ -230,9 +278,19 @@ function BookForm({ club, choice, onBooked }: { club: PublicClub; choice: Option
         </label>
         {error && <div className="alert">{error}</div>}
         <button className="btn btn-primary btn-block" disabled={busy || !consent}>
-          {busy ? t("common.saving") : t("public.book", { price: money(choice.price, club.currency) })}
+          {busy
+            ? t("common.saving")
+            : prepay > 0
+              ? t("public.payAndBook", { price: money(prepay, club.currency) })
+              : t("public.book", { price: money(choice.price, club.currency) })}
         </button>
-        <p className="hint">{t("public.payAtClub")}</p>
+        <p className="hint">
+          {prepay <= 0
+            ? t("public.payAtClub")
+            : rest > 0
+              ? t("public.prepayPart", { minutes: club.hold_minutes, rest: money(rest, club.currency) })
+              : t("public.prepayFull", { minutes: club.hold_minutes })}
+        </p>
       </form>
     </section>
   );
@@ -245,6 +303,10 @@ function BookedCard({ booked, onChanged }: { booked: Booked; onChanged?: (b: Boo
   const [copied, setCopied] = useState(false);
   const link = `${window.location.origin}/b/${booked.token}`;
   const cancelled = booked.status === "cancelled";
+  const awaiting = booked.awaiting_payment;
+  const prepaid = Number(booked.prepaid);
+  const refunded = Number(booked.refunded);
+  const cur = (v: string | number) => money(v, booked.currency);
 
   const cancel = async () => {
     try {
@@ -255,12 +317,20 @@ function BookedCard({ booked, onChanged }: { booked: Booked; onChanged?: (b: Boo
     }
   };
 
+  const heading = awaiting
+    ? t("public.awaitingTitle")
+    : booked.payment_missed
+      ? t("public.missedTitle")
+      : cancelled
+        ? t("public.cancelledTitle")
+        : t("public.bookedTitle");
+
   return (
-    <section className={`card booked${cancelled ? " is-cancelled" : ""}`}>
+    <section className={`card booked${cancelled ? " is-cancelled" : ""}${awaiting ? " is-awaiting" : ""}`}>
       <div className="booked-icon" aria-hidden>
-        {cancelled ? "✕" : "✓"}
+        {awaiting ? "⏳" : cancelled ? "✕" : "✓"}
       </div>
-      <h1>{cancelled ? t("public.cancelledTitle") : t("public.bookedTitle")}</h1>
+      <h1>{heading}</h1>
       <div className="public-choice">
         <span>
           <strong>
@@ -269,36 +339,60 @@ function BookedCard({ booked, onChanged }: { booked: Booked; onChanged?: (b: Boo
           {longDate(dateIn(booked.start_at, booked.timezone))} · {timeRange(booked.start_at, booked.end_at, booked.timezone)}
           <small>{booked.customer_name}</small>
         </span>
-        <strong className="price">{money(booked.price, booked.currency)}</strong>
+        <strong className="price">{cur(booked.price)}</strong>
       </div>
+
+      {awaiting && booked.payment_url && booked.prepay_amount && (
+        <>
+          <p className="note">
+            {t("public.awaitingHint", { time: ltr(clockTime(booked.hold_until ?? booked.start_at, booked.timezone)) })}
+          </p>
+          <a className="btn btn-primary btn-block" href={booked.payment_url}>
+            {t("public.payNow", { price: cur(booked.prepay_amount) })}
+          </a>
+        </>
+      )}
+      {booked.payment_missed && <p className="note">{t("public.missedHint")}</p>}
+      {!cancelled && !awaiting && prepaid > 0 && (
+        <p className="paid-line">
+          ✓ {t("public.prepaid", { amount: cur(prepaid) })}
+          {Number(booked.price) > prepaid && ` · ${t("public.restAtClub", { amount: cur(Number(booked.price) - prepaid) })}`}
+        </p>
+      )}
+      {cancelled && refunded > 0 && <p className="paid-line">↩ {t("public.refunded", { amount: cur(refunded) })}</p>}
+
       {!cancelled && (
         <>
-          {booked.telegram_link && (
+          {!awaiting && booked.telegram_link && (
             <a className="btn btn-telegram btn-block" href={booked.telegram_link} target="_blank" rel="noreferrer">
               ✈ {t("public.telegram")}
             </a>
           )}
-          <div className="public-link">
-            <code dir="ltr">{link}</code>
-            <button
-              className="btn btn-small"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(link);
-                  setCopied(true);
-                } catch {
-                  setCopied(false);
-                }
-              }}
-            >
-              {copied ? `✓ ${t("receipt.copied")}` : t("receipt.copy")}
-            </button>
-          </div>
-          <p className="hint">{t("public.keepLink")}</p>
-          {booked.can_cancel ? (
+          {!awaiting && (
+            <>
+              <div className="public-link">
+                <code dir="ltr">{link}</code>
+                <button
+                  className="btn btn-small"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(link);
+                      setCopied(true);
+                    } catch {
+                      setCopied(false);
+                    }
+                  }}
+                >
+                  {copied ? `✓ ${t("receipt.copied")}` : t("receipt.copy")}
+                </button>
+              </div>
+              <p className="hint">{t("public.keepLink")}</p>
+            </>
+          )}
+          {awaiting || booked.can_cancel ? (
             confirming ? (
               <div className="confirm-row">
-                <span>{t("bill.confirmCancel")}</span>
+                <span>{awaiting ? t("public.confirmGiveUp") : t("bill.confirmCancel")}</span>
                 <button className="btn" onClick={() => setConfirming(false)}>
                   {t("common.keep")}
                 </button>
@@ -308,12 +402,16 @@ function BookedCard({ booked, onChanged }: { booked: Booked; onChanged?: (b: Boo
               </div>
             ) : (
               <button className="btn btn-danger-ghost" onClick={() => setConfirming(true)}>
-                {t("public.cancel", { until: ltr(dateTime(booked.cancel_until, booked.timezone)) })}
+                {awaiting
+                  ? t("public.giveUp")
+                  : // A whole date in the reader's language keeps its own order: isolate it, never force LTR.
+                    t("public.cancel", { until: isolate(dateTime(booked.cancel_until, booked.timezone)) })}
               </button>
             )
           ) : (
             <p className="note">{t("public.tooLate")}</p>
           )}
+          {!awaiting && prepaid > 0 && booked.can_cancel && <p className="hint">{t("public.refundOnCancel")}</p>}
         </>
       )}
       {error && <div className="alert">{error}</div>}
@@ -324,7 +422,7 @@ function BookedCard({ booked, onChanged }: { booked: Booked; onChanged?: (b: Boo
   );
 }
 
-/** /b/:token — the customer's private link to their booking. */
+/** /b/:token — the customer's private link to their booking. Payment pages send them back here. */
 export function PublicBookingLink() {
   const t = useT();
   const { token = "" } = useParams();
@@ -337,6 +435,18 @@ export function PublicBookingLink() {
       .catch(() => setMissing(true));
   }, [token]);
 
+  // Coming back from paying, the provider may need a few seconds to confirm.
+  const awaiting = booked?.awaiting_payment ?? false;
+  useEffect(() => {
+    if (!awaiting) return;
+    const timer = window.setInterval(() => {
+      PublicApi.booking(token)
+        .then(setBooked)
+        .catch(() => undefined);
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [awaiting, token]);
+
   if (missing) {
     return (
       <Frame>
@@ -347,4 +457,79 @@ export function PublicBookingLink() {
     );
   }
   return <Frame title={booked?.club}>{booked && <BookedCard booked={booked} onChanged={setBooked} />}</Frame>;
+}
+
+/** /pay/demo/:id — the demo provider's payment page, for trying online booking without real money. */
+export function DemoPaymentPage() {
+  const t = useT();
+  const { id = "" } = useParams();
+  const navigate = useNavigate();
+  const [payment, setPayment] = useState<DemoPayment | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    PublicApi.demoPayment(id)
+      .then(setPayment)
+      .catch(() => setMissing(true));
+  }, [id]);
+
+  const finish = async (result: "succeeded" | "canceled") => {
+    setBusy(true);
+    setError(null);
+    try {
+      const done = await PublicApi.demoPay(id, result);
+      navigate(done.return_url);
+    } catch (err) {
+      setError(errorText(err, t));
+      setBusy(false);
+    }
+  };
+
+  if (missing) {
+    return (
+      <Frame>
+        <div className="card empty">
+          <h3>{t("public.linkNotFound")}</h3>
+        </div>
+      </Frame>
+    );
+  }
+  if (!payment) return <Frame>{null}</Frame>;
+  return (
+    <Frame title={payment.club}>
+      <section className="card demo-pay">
+        <span className="demo-badge">{t("demoPay.badge")}</span>
+        <h1>{t("demoPay.title")}</h1>
+        <p className="muted">{t("demoPay.hint")}</p>
+        <div className="demo-card" aria-hidden>
+          <span>•••• •••• •••• 4242</span>
+          <span>12/30</span>
+        </div>
+        <div className="public-choice">
+          <span>
+            <strong>{payment.club}</strong>
+            {t("demoPay.prepayment")}
+          </span>
+          <strong className="price">{money(payment.amount, payment.currency)}</strong>
+        </div>
+        {payment.status === "pending" ? (
+          <>
+            <button className="btn btn-primary btn-block" disabled={busy} onClick={() => finish("succeeded")}>
+              {t("demoPay.pay", { price: money(payment.amount, payment.currency) })}
+            </button>
+            <button className="btn btn-block" disabled={busy} onClick={() => finish("canceled")}>
+              {t("demoPay.cancel")}
+            </button>
+          </>
+        ) : (
+          <Link className="btn btn-block" to={payment.return_url}>
+            {t("demoPay.back")}
+          </Link>
+        )}
+        {error && <div className="alert">{error}</div>}
+      </section>
+    </Frame>
+  );
 }

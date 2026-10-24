@@ -17,6 +17,10 @@ export interface Club {
   online_booking_enabled: boolean;
   online_days_ahead: number;
   online_cancel_hours: number;
+  /** Share of the price paid online when booking (0 = no prepayment). */
+  online_prepay_percent: number;
+  /** Who takes online payments: YooKassa, the demo page (testing only), or nobody yet. */
+  payments_provider: "yookassa" | "demo" | null;
   telegram_chat_id: string;
   language: "en" | "ar" | "ru";
 }
@@ -45,8 +49,9 @@ export interface Availability {
 }
 
 export type PaymentStatus = "unpaid" | "partial" | "paid" | "open";
-export type PaymentMethod = "cash" | "card" | "transfer" | "balance";
-export type MoneyMethod = Exclude<PaymentMethod, "balance">;
+/** "online" is a prepayment made on the online booking page; staff never enter it by hand. */
+export type PaymentMethod = "cash" | "card" | "transfer" | "balance" | "online";
+export type MoneyMethod = Exclude<PaymentMethod, "balance" | "online">;
 export type DiscountKind = "" | "first_visit" | "nth_visit" | "category" | "manual";
 
 export interface Booking {
@@ -72,6 +77,8 @@ export interface Booking {
   discount_note: string;
   discount: string;
   source: "staff" | "online";
+  /** An online booking waiting for its prepayment: the court is only held until then. */
+  hold_until: string | null;
   created_at: string;
   cancelled_at: string | null;
   court_total: string;
@@ -186,7 +193,7 @@ export interface DailyReport {
   topups_total: string;
   balance_used: string;
   by_method: {
-    method: MoneyMethod;
+    method: MoneyMethod | "online";
     bookings: string;
     sales: string;
     topups: string;
@@ -534,7 +541,29 @@ export type BookingInput = {
   customer_phone: string;
 };
 
+export interface StaffNotification {
+  id: number;
+  kind: "online_booking" | "online_cancelled" | "late_payment";
+  booking: number | null;
+  /** The booking as it was when this happened. */
+  data: {
+    customer_name: string;
+    customer_phone: string;
+    court: string;
+    start_at: string;
+    end_at: string;
+    price: string;
+    paid: string;
+    amount?: string;
+  };
+  created_at: string;
+  unread: boolean;
+}
+
 export const Api = {
+  notifications: (club: number) =>
+    api<{ unread: number; items: StaffNotification[] }>("/notifications/", { query: { club } }),
+  notificationsSeen: (club: number) => api<{ unread: number }>("/notifications/seen/", { method: "POST", body: { club } }),
   dashboard: (club: number) => api<Dashboard>("/reports/dashboard/", { query: { club } }),
   searchBookings: (search: string) => api<Paged<Booking>>("/bookings/", { query: { search } }).then((d) => asList(d)),
 
@@ -665,15 +694,24 @@ export interface PublicClub {
   opening_hour: number;
   closing_hour: number;
   slot_minutes: number;
+  /** Customers choose any length from min to max, in steps of step_minutes. */
+  min_minutes: number;
+  max_minutes: number;
+  step_minutes: number;
+  /** Share of the price paid online when booking; the court is held hold_minutes while paying. */
+  prepay_percent: number;
+  hold_minutes: number;
   days_ahead: number;
   cancel_hours: number;
   today: string;
   courts: { id: number; name: string; kind: "indoor" | "outdoor" }[];
 }
 
+/** Free start times for one length of game, each with its exact price. */
 export interface PublicAvailability {
   date: string;
-  courts: { id: number; name: string; kind: "indoor" | "outdoor"; slots: Slot[] }[];
+  minutes: number;
+  courts: { id: number; name: string; kind: "indoor" | "outdoor"; times: { start: string; end: string; price: string }[] }[];
 }
 
 export interface PublicBooking {
@@ -691,6 +729,25 @@ export interface PublicBooking {
   cancel_until: string;
   can_cancel: boolean;
   telegram_link: string | null;
+  /** Waiting for the prepayment: pay at payment_url before hold_until, or the court is freed. */
+  awaiting_payment: boolean;
+  hold_until: string | null;
+  payment_url: string | null;
+  prepay_amount: string | null;
+  prepaid: string;
+  refunded: string;
+  /** The prepayment never came, so the booking was released. */
+  payment_missed: boolean;
+}
+
+/** The demo provider's payment page (testing only). */
+export interface DemoPayment {
+  id: string;
+  amount: string;
+  currency: string;
+  club: string;
+  status: "pending" | "succeeded" | "canceled";
+  return_url: string;
 }
 
 /** Calls without a session: never sends a token and never signs anyone out. */
@@ -711,11 +768,15 @@ async function publicApi<T>(path: string, options: Options = {}): Promise<T> {
 
 export const PublicApi = {
   club: (slug: string) => publicApi<PublicClub>(`/clubs/${slug}/`),
-  availability: (slug: string, date: string) => publicApi<PublicAvailability>(`/clubs/${slug}/availability/`, { query: { date } }),
+  availability: (slug: string, date: string, minutes: number) =>
+    publicApi<PublicAvailability>(`/clubs/${slug}/availability/`, { query: { date, minutes } }),
   book: (
     slug: string,
     body: { court: number; start_at: string; end_at: string; customer_name: string; customer_phone: string; consent: boolean },
   ) => publicApi<PublicBooking>(`/clubs/${slug}/bookings/`, { method: "POST", body }),
   booking: (token: string) => publicApi<PublicBooking>(`/bookings/${token}/`),
   cancel: (token: string) => publicApi<PublicBooking>(`/bookings/${token}/cancel/`, { method: "POST" }),
+  demoPayment: (id: string) => publicApi<DemoPayment>(`/payments/${id}/demo/`),
+  demoPay: (id: string, result: "succeeded" | "canceled") =>
+    publicApi<DemoPayment>(`/payments/${id}/demo/`, { method: "POST", body: { result } }),
 };

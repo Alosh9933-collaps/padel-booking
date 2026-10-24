@@ -222,9 +222,13 @@ export function BillModal({
     >
       <div className="chips">
         {bill.status !== "confirmed" && <span className="chip chip-off">{t(`status.${bill.status}`)}</span>}
+        {bill.source === "online" && <span className="chip">🌐 {t("bill.online")}</span>}
         {bill.series && <span className="chip">↻ {t("bill.weekly")}</span>}
         {bill.status !== "cancelled" && <PaymentBadge booking={bill} />}
       </div>
+      {bill.hold_until && bill.status === "confirmed" && (
+        <p className="note">⏳ {t("bill.awaitingPayment", { time: ltr(clockTime(bill.hold_until, club.timezone)) })}</p>
+      )}
 
       {bill.is_open && active && (
         <div className="live-panel">
