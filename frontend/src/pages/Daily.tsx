@@ -90,6 +90,9 @@ export default function Daily() {
                     bookings: money(byMethod(m)?.bookings ?? 0, report.currency),
                     sales: money(byMethod(m)?.sales ?? 0, report.currency),
                   })}
+                  {Number(byMethod(m)?.topups ?? 0) > 0 && (
+                    <span className="ok-text"> · {t("daily.topups")} {money(byMethod(m)?.topups ?? 0, report.currency)}</span>
+                  )}
                   {Number(byMethod(m)?.refunds ?? 0) > 0 && (
                     <span className="due-text"> · {t("daily.refunds")} {minus(money(byMethod(m)?.refunds ?? 0, report.currency))}</span>
                   )}
@@ -145,6 +148,9 @@ export default function Daily() {
               <p className="hint">{t("daily.bookingsCount", { count: report.bookings })}</p>
               {Number(report.discount_total) > 0 && (
                 <p className="hint">{t("daily.discounts", { amount: money(report.discount_total, report.currency) })}</p>
+              )}
+              {Number(report.balance_used) > 0 && (
+                <p className="hint">{t("daily.balanceUsed", { amount: money(report.balance_used, report.currency) })}</p>
               )}
               {Number(report.refunds_total) > 0 && (
                 <p className="hint">{t("daily.refundsGiven", { amount: money(report.refunds_total, report.currency) })}</p>

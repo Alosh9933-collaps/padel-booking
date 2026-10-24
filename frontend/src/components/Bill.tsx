@@ -15,9 +15,15 @@ import { useClub, useToast } from "../session";
 import { ActivityList } from "./ActivityList";
 import { CashCalculator } from "./CashCalculator";
 import { Modal } from "./Modal";
+import { ReceiptModal } from "./Receipt";
 
 const MINUTE = 60_000;
 const METHODS: PaymentMethod[] = ["cash", "card", "transfer"];
+
+/** Money methods, plus the customer's prepaid balance when the booking has a customer. */
+function methodsFor(bill: BookingBill): PaymentMethod[] {
+  return bill.customer_balance !== null ? [...METHODS, "balance"] : METHODS;
+}
 
 /** "HH:MM" on a club-local day as ISO with the club's offset. "00:00" as an end means midnight. */
 export function localIso(day: string, time: string, timeZone: string, isEnd: boolean) {
@@ -56,6 +62,7 @@ export function BillModal({
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<"bill" | "menu" | "edit">("bill");
   const [confirm, setConfirm] = useState<"cancel" | "following" | "no_show" | null>(null);
+  const [receipt, setReceipt] = useState(false);
   const [changed, setChanged] = useState(false);
 
   useEffect(() => {
@@ -174,6 +181,11 @@ export function BillModal({
         </div>
       )}
       <span className="grow" />
+      {!bill.is_open && (
+        <button className="btn" onClick={() => setReceipt(true)}>
+          🧾 {t("receipt.button")}
+        </button>
+      )}
       {active && bill.is_open ? (
         <button
           className="btn btn-primary"
@@ -345,6 +357,7 @@ export function BillModal({
         </>
       )}
       {error && <div className="alert">{error}</div>}
+      {receipt && <ReceiptModal bill={bill} onClose={() => setReceipt(false)} />}
     </Modal>
   );
 }
@@ -441,6 +454,7 @@ function Payments({
             refundable={refundable}
             busy={busy}
             onCancel={() => setRefunding(false)}
+            methods={methodsFor(bill)}
             onSubmit={async (body) => {
               if (await onRefund(body)) setRefunding(false);
             }}
@@ -460,9 +474,16 @@ function Payments({
       {canPay && (
         <form className="pay-form" onSubmit={submit}>
           <div className="segmented">
-            {METHODS.map((m) => (
-              <button type="button" key={m} className={method === m ? "on" : ""} onClick={() => setMethod(m)}>
+            {methodsFor(bill).map((m) => (
+              <button
+                type="button"
+                key={m}
+                className={method === m ? "on" : ""}
+                onClick={() => setMethod(m)}
+                disabled={m === "balance" && Number(bill.customer_balance) <= 0}
+              >
                 {t(`method.${m}`)}
+                {m === "balance" && <small>{money(bill.customer_balance ?? 0, club.currency)}</small>}
               </button>
             ))}
           </div>
@@ -501,11 +522,13 @@ function Payments({
 
 function RefundForm({
   refundable,
+  methods,
   busy,
   onCancel,
   onSubmit,
 }: {
   refundable: number;
+  methods: PaymentMethod[];
   busy: boolean;
   onCancel: () => void;
   onSubmit: (body: { amount: string; method: PaymentMethod; reason: string }) => void;
@@ -526,7 +549,7 @@ function RefundForm({
     >
       <strong>↩ {t("refund.title")}</strong>
       <div className="segmented">
-        {METHODS.map((m) => (
+        {methods.map((m) => (
           <button type="button" key={m} className={method === m ? "on" : ""} onClick={() => setMethod(m)}>
             {t(`method.${m}`)}
           </button>

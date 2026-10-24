@@ -97,7 +97,7 @@ export function clockTime(iso: string, timeZone: string): string {
  * Unicode isolates stop "12:00–14:00" from being shown as "14:00–12:00".
  */
 export function ltr(text: string): string {
-  return `⁦${text}⁩`;
+  return `\u2066${text}\u2069`;
 }
 
 /**
@@ -105,7 +105,7 @@ export function ltr(text: string): string {
  * stays in order inside Arabic text and "2 × قهوة" inside English text.
  */
 export function isolate(text: string): string {
-  return `⁨${text}⁩`;
+  return `\u2068${text}\u2069`;
 }
 
 /** A minus amount ("−₽500", "−10%") that keeps its sign in front in right-to-left text. */

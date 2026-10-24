@@ -86,6 +86,15 @@ export function ShiftPanel({ version, onChanged }: { version: number; onChanged:
           <small>{t("shift.cashSales")}</small>
           {money(shift.cash_sales, club.currency)}
         </span>
+        {Number(shift.cash_topups) > 0 && (
+          <>
+            <b>+</b>
+            <span>
+              <small>{t("shift.cashTopups")}</small>
+              {money(shift.cash_topups, club.currency)}
+            </span>
+          </>
+        )}
         <b>−</b>
         <span>
           <small>{t("shift.cashRefunds")}</small>

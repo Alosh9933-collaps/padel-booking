@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import { Api, type CustomerCategory, type DiscountSettings } from "../api";
 import { Modal } from "../components/Modal";
+import { PlansManager } from "../components/Wallet";
 import { minus } from "../format";
 import { errorText, useT } from "../i18n";
 import { useClub, useToast } from "../session";
@@ -196,6 +197,8 @@ export default function Loyalty() {
           ))}
         </section>
       </div>
+
+      <PlansManager />
 
       {editing && (
         <CategoryModal

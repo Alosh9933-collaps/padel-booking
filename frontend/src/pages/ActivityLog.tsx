@@ -8,7 +8,7 @@ import { errorText, useT } from "../i18n";
 import { useClub } from "../session";
 import { useNow } from "./Schedule";
 
-const GROUPS = ["", "booking", "discount", "payment", "refund", "item", "sale", "shift"];
+const GROUPS = ["", "booking", "discount", "payment", "refund", "item", "sale", "wallet", "shift"];
 
 /** Who did what today: the club's activity log, for owners and managers. */
 export default function ActivityLog() {

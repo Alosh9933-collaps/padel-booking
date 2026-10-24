@@ -12,6 +12,13 @@ export interface Club {
   closing_hour: number;
   slot_minutes: number;
   role: Role;
+  /** Address of the public booking page: /book/<slug>. */
+  slug: string;
+  online_booking_enabled: boolean;
+  online_days_ahead: number;
+  online_cancel_hours: number;
+  telegram_chat_id: string;
+  language: "en" | "ar" | "ru";
 }
 
 export interface Court {
@@ -38,7 +45,8 @@ export interface Availability {
 }
 
 export type PaymentStatus = "unpaid" | "partial" | "paid" | "open";
-export type PaymentMethod = "cash" | "card" | "transfer";
+export type PaymentMethod = "cash" | "card" | "transfer" | "balance";
+export type MoneyMethod = Exclude<PaymentMethod, "balance">;
 export type DiscountKind = "" | "first_visit" | "nth_visit" | "category" | "manual";
 
 export interface Booking {
@@ -63,6 +71,7 @@ export interface Booking {
   discount_scope: "court" | "total";
   discount_note: string;
   discount: string;
+  source: "staff" | "online";
   created_at: string;
   cancelled_at: string | null;
   court_total: string;
@@ -119,6 +128,8 @@ export interface BookingBill extends Booking {
   refunds: Refund[];
   /** Loyalty discounts this booking qualifies for, best first. */
   offers: Offer[];
+  /** The customer's prepaid balance, or null without a customer. */
+  customer_balance: string | null;
 }
 
 export interface CustomerCategory {
@@ -172,7 +183,17 @@ export interface DailyReport {
   received: string;
   refunds_total: string;
   sales_total: string;
-  by_method: { method: PaymentMethod; bookings: string; sales: string; refunds: string; total: string; count: number }[];
+  topups_total: string;
+  balance_used: string;
+  by_method: {
+    method: MoneyMethod;
+    bookings: string;
+    sales: string;
+    topups: string;
+    refunds: string;
+    total: string;
+    count: number;
+  }[];
   buffet: { name: string; quantity: number; total: string }[];
   buffet_total: string;
   discount_total: string;
@@ -203,6 +224,7 @@ export interface Customer {
   visits: number;
   no_shows: number;
   spent: string;
+  balance: string;
   last_visit: string | null;
 }
 
@@ -252,6 +274,7 @@ export interface Shift {
   note: string;
   cash_bookings: string;
   cash_sales: string;
+  cash_topups: string;
   cash_refunds: string;
   expected: string;
   difference: string | null;
@@ -266,6 +289,61 @@ export interface Activity {
   amount: string | null;
   data: Record<string, unknown>;
   created_at: string;
+}
+
+export interface TopUpPlan {
+  id: number;
+  club: number;
+  name: string;
+  price: string;
+  credit: string;
+  is_active: boolean;
+}
+
+export interface BalanceEntry {
+  id: number;
+  kind: "topup" | "payment" | "sale" | "refund" | "adjustment";
+  amount: string;
+  paid: string | null;
+  method: string;
+  plan: number | null;
+  plan_name: string | null;
+  booking: number | null;
+  sale: number | null;
+  note: string;
+  created_at: string;
+  created_by_name: string;
+}
+
+export interface DashboardPeriod {
+  from: string;
+  to: string;
+  revenue: string;
+  court: string;
+  buffet: string;
+  discounts: string;
+  bookings: number;
+  average: string;
+  occupancy: number;
+  new_customers: number;
+  topups: string;
+}
+
+export interface Dashboard {
+  currency: string;
+  this_month: DashboardPeriod;
+  last_month: DashboardPeriod;
+  heatmap: { from: string; to: string; cells: { weekday: number; hour: number; occupancy: number }[] };
+  top_customers: {
+    id: number;
+    name: string;
+    phone: string;
+    category_name: string | null;
+    category_color: string | null;
+    spent: string;
+    visits: number;
+  }[];
+  months: { month: string; revenue: string; bookings: number }[];
 }
 
 export interface WeeklyWeek {
@@ -457,6 +535,18 @@ export type BookingInput = {
 };
 
 export const Api = {
+  dashboard: (club: number) => api<Dashboard>("/reports/dashboard/", { query: { club } }),
+  searchBookings: (search: string) => api<Paged<Booking>>("/bookings/", { query: { search } }).then((d) => asList(d)),
+
+  plans: (club: number) => api<Paged<TopUpPlan>>("/topup-plans/", { query: { club } }).then((d) => asList(d)),
+  createPlan: (body: Omit<TopUpPlan, "id">) => api<TopUpPlan>("/topup-plans/", { method: "POST", body }),
+  updatePlan: (id: number, patch: Partial<Omit<TopUpPlan, "id">>) =>
+    api<TopUpPlan>(`/topup-plans/${id}/`, { method: "PATCH", body: patch }),
+  deletePlan: (id: number) => api<void>(`/topup-plans/${id}/`, { method: "DELETE" }),
+  balanceHistory: (customer: number) => api<BalanceEntry[]>(`/customers/${customer}/balance/`),
+  topUp: (customer: number, body: { plan?: number; paid?: string; credit?: string; method: MoneyMethod; note: string }) =>
+    api<BalanceEntry>(`/customers/${customer}/topup/`, { method: "POST", body }),
+
   clubs: () => api<Paged<Club>>("/clubs/").then((d) => asList(d)),
   updateClub: (id: number, patch: Partial<Club>) =>
     api<Club>(`/clubs/${id}/`, { method: "PATCH", body: patch }),
@@ -473,7 +563,7 @@ export const Api = {
   bookings: (query: Query) => api<Paged<Booking>>("/bookings/", { query }).then((d) => asList(d)),
   booking: (id: number) => api<BookingBill>(`/bookings/${id}/`),
   createBooking: (body: BookingInput) => api<BookingBill>("/bookings/", { method: "POST", body }),
-  changeBooking: (id: number, patch: Partial<Omit<BookingInput, "court">>) =>
+  changeBooking: (id: number, patch: Partial<BookingInput>) =>
     api<BookingBill>(`/bookings/${id}/`, { method: "PATCH", body: patch }),
   cancelBooking: (id: number) => api<BookingBill>(`/bookings/${id}/cancel/`, { method: "POST" }),
   cancelFollowing: (id: number) =>
@@ -563,4 +653,69 @@ export const Api = {
   revenue: (club: number, from: string, to: string) =>
     api<RevenueReport>("/reports/revenue/", { query: { club, from, to } }),
   daily: (club: number, date: string) => api<DailyReport>("/reports/daily/", { query: { club, date } }),
+};
+
+// ---------- Public booking (no login) ----------
+
+export interface PublicClub {
+  name: string;
+  slug: string;
+  timezone: string;
+  currency: string;
+  opening_hour: number;
+  closing_hour: number;
+  slot_minutes: number;
+  days_ahead: number;
+  cancel_hours: number;
+  today: string;
+  courts: { id: number; name: string; kind: "indoor" | "outdoor" }[];
+}
+
+export interface PublicAvailability {
+  date: string;
+  courts: { id: number; name: string; kind: "indoor" | "outdoor"; slots: Slot[] }[];
+}
+
+export interface PublicBooking {
+  token: string;
+  club: string;
+  club_slug: string;
+  timezone: string;
+  currency: string;
+  court: string;
+  customer_name: string;
+  start_at: string;
+  end_at: string;
+  price: string;
+  status: "confirmed" | "cancelled" | "no_show";
+  cancel_until: string;
+  can_cancel: boolean;
+  telegram_link: string | null;
+}
+
+/** Calls without a session: never sends a token and never signs anyone out. */
+async function publicApi<T>(path: string, options: Options = {}): Promise<T> {
+  const url = new URL(`/api/public${path}`, window.location.origin);
+  for (const [key, value] of Object.entries(options.query ?? {})) {
+    if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
+  }
+  const res = await fetch(url, {
+    method: options.method ?? "GET",
+    headers: { Accept: "application/json", ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}) },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiError(res.status, errorMessage(data, res.status), data);
+  return data as T;
+}
+
+export const PublicApi = {
+  club: (slug: string) => publicApi<PublicClub>(`/clubs/${slug}/`),
+  availability: (slug: string, date: string) => publicApi<PublicAvailability>(`/clubs/${slug}/availability/`, { query: { date } }),
+  book: (
+    slug: string,
+    body: { court: number; start_at: string; end_at: string; customer_name: string; customer_phone: string; consent: boolean },
+  ) => publicApi<PublicBooking>(`/clubs/${slug}/bookings/`, { method: "POST", body }),
+  booking: (token: string) => publicApi<PublicBooking>(`/bookings/${token}/`),
+  cancel: (token: string) => publicApi<PublicBooking>(`/bookings/${token}/cancel/`, { method: "POST" }),
 };

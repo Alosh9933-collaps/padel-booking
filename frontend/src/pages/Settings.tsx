@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from "react";
 
 import { Api } from "../api";
+import { OnlineSettings } from "../components/OnlineSettings";
 import { hourLabel } from "../format";
 import { errorText, useT } from "../i18n";
 import { useClub, useToast } from "../session";
@@ -127,6 +128,8 @@ export default function Settings() {
             <dd>{t("settings.rowsValue", { minutes: club.slot_minutes })}</dd>
           </dl>
         </section>
+
+        <OnlineSettings />
       </div>
     </div>
   );

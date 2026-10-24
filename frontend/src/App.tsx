@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 import {
   Api,
@@ -17,10 +17,12 @@ import { errorText, useI18n } from "./i18n";
 import ActivityLog from "./pages/ActivityLog";
 import Courts from "./pages/Courts";
 import Customers from "./pages/Customers";
+import Dashboard from "./pages/Dashboard";
 import Daily from "./pages/Daily";
 import Login from "./pages/Login";
 import Menu from "./pages/Menu";
 import Prices from "./pages/Prices";
+import { PublicBookingLink, PublicBookingPage } from "./pages/PublicBooking";
 import Revenue from "./pages/Revenue";
 import Schedule from "./pages/Schedule";
 import Settings from "./pages/Settings";
@@ -29,12 +31,23 @@ import { ClubContext } from "./session";
 
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(isLoggedIn);
+  const { pathname } = useLocation();
 
   useEffect(() => {
     const expired = () => setLoggedIn(false);
     window.addEventListener(SESSION_EXPIRED, expired);
     return () => window.removeEventListener(SESSION_EXPIRED, expired);
   }, []);
+
+  // Customers' pages: no login, no staff shell.
+  if (pathname.startsWith("/book/") || pathname.startsWith("/b/")) {
+    return (
+      <Routes>
+        <Route path="/book/:slug" element={<PublicBookingPage />} />
+        <Route path="/b/:token" element={<PublicBookingLink />} />
+      </Routes>
+    );
+  }
 
   if (!loggedIn) {
     return (
@@ -47,6 +60,7 @@ export default function App() {
 }
 
 const NAV = [
+  { to: "/dashboard", key: "nav.dashboard", icon: "◔", managersOnly: true },
   { to: "/", key: "nav.schedule", icon: "▦", managersOnly: false },
   { to: "/daily", key: "nav.daily", icon: "▤", managersOnly: false },
   { to: "/customers", key: "nav.customers", icon: "☺", managersOnly: false },
@@ -171,6 +185,7 @@ function Shell({ onLogout }: { onLogout: () => void }) {
             <Route path="/revenue" element={<Revenue key={value.club.id} />} />
             <Route path="/staff" element={<Staff key={value.club.id} />} />
             <Route path="/activity" element={<ActivityLog key={value.club.id} />} />
+            <Route path="/dashboard" element={<Dashboard key={value.club.id} />} />
             <Route path="/settings" element={<Settings key={value.club.id} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

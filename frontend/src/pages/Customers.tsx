@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { Api, type Booking, type Customer, type CustomerCategory, type DiscountSettings } from "../api";
 import { BillModal, PaymentBadge } from "../components/Bill";
 import { Modal } from "../components/Modal";
+import { BalanceCard } from "../components/Wallet";
 import { clockTime, dateIn, ltr, minus, money, shortDate } from "../format";
 import { errorText, useT } from "../i18n";
 import { useClub, useToast } from "../session";
@@ -161,6 +162,7 @@ function CustomerList() {
                   {rules?.nth_visit_enabled && <th>{t("loyalty.progress")}</th>}
                   <th className="num">{t("customers.noShows")}</th>
                   <th className="num">{t("customers.spent")}</th>
+                  <th className="num">{t("wallet.balance")}</th>
                   <th>{t("customers.lastVisit")}</th>
                 </tr>
               </thead>
@@ -185,6 +187,7 @@ function CustomerList() {
                     )}
                     <td className="num">{c.no_shows > 0 ? <span className="warn-text">{c.no_shows}</span> : 0}</td>
                     <td className="num strong">{money(c.spent, club.currency)}</td>
+                    <td className="num">{Number(c.balance) !== 0 ? <span className="ok-text strong">{money(c.balance, club.currency)}</span> : "—"}</td>
                     <td>{c.last_visit ? shortDate(dateIn(c.last_visit, club.timezone)) : "—"}</td>
                   </tr>
                 ))}
@@ -204,6 +207,7 @@ function CustomerList() {
             setOpen(null);
             setVersion((v) => v + 1);
           }}
+          onRefresh={() => setVersion((v) => v + 1)}
         />
       )}
     </>
@@ -216,12 +220,15 @@ function CustomerModal({
   rules,
   onClose,
   onSaved,
+  onRefresh,
 }: {
   customer: Customer | null;
   categories: CustomerCategory[];
   rules: DiscountSettings | null;
   onClose: () => void;
   onSaved: () => void;
+  /** Something changed (like the balance) but the window stays open. */
+  onRefresh: () => void;
 }) {
   const t = useT();
   const { club } = useClub();
@@ -286,6 +293,7 @@ function CustomerModal({
         </>
       }
     >
+      {customer && <BalanceCard customer={customer} onChanged={onRefresh} />}
       {customer && rules?.nth_visit_enabled && (
         <div className="loyalty-card">
           <LoyaltyProgress visits={customer.visits} rules={rules} />

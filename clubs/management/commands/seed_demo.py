@@ -6,6 +6,7 @@
 Logins (all with the password below): demo_owner, demo_manager, demo_desk.
 """
 
+import uuid
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -18,6 +19,8 @@ from django.utils import timezone
 from bookings.billing import add_item, add_payment, totals
 from bookings.models import Booking, Payment
 from bookings.services import BookingError, create_booking, create_weekly, mark_no_show
+from wallet.models import TopUpPlan
+from wallet.services import top_up
 from buffet.models import Product
 from clubs.models import Club, Court, Customer, CustomerCategory, DiscountSettings, Membership, PriceRule
 
@@ -78,7 +81,14 @@ class Command(BaseCommand):
 
         tz = ZoneInfo(TZ)
         club = Club.objects.create(
-            name=CLUB_NAME, timezone=TZ, currency="RUB", opening_hour=8, closing_hour=24, slot_minutes=30
+            name=CLUB_NAME,
+            timezone=TZ,
+            currency="RUB",
+            opening_hour=8,
+            closing_hour=24,
+            slot_minutes=30,
+            slug="padel-arena-demo",
+            online_booking_enabled=True,
         )
         courts = [
             Court.objects.create(club=club, name="Court 1", kind=Court.Kind.INDOOR),
@@ -108,7 +118,7 @@ class Command(BaseCommand):
         now = timezone.now()
         today = now.astimezone(tz).date()
         made = 0
-        for offset in range(-13, 3):
+        for offset in range(-55, 3):
             day = today + timedelta(days=offset)
             for i, (court_index, hour, minute, minutes) in enumerate(DAY_PLAN):
                 # Skip some slots so days differ.
@@ -150,7 +160,31 @@ class Command(BaseCommand):
         Customer.objects.filter(club=club, name__in=["Ivan Petrov", "Ali Hassan", "Anna Kuznetsova"]).update(category=regular)
         Customer.objects.filter(club=club, name="Omar Saleh").update(category=coach)
 
+        # Packages, and a few customers with a prepaid balance.
+        silver = TopUpPlan.objects.create(club=club, name="Silver", price=Decimal("5000"), credit=Decimal("5500"))
+        gold = TopUpPlan.objects.create(club=club, name="Gold", price=Decimal("10000"), credit=Decimal("11500"))
+        TopUpPlan.objects.create(club=club, name="Platinum", price=Decimal("20000"), credit=Decimal("24000"))
+        for name, plan in (("Ivan Petrov", gold), ("Sara Khalil", silver), ("Olga Smirnova", silver)):
+            customer = Customer.objects.filter(club=club, name=name).first()
+            if customer:
+                top_up(customer, plan=plan, method="card")
+
+        # Two bookings made online by customers.
+        tomorrow = today + timedelta(days=1)
+        for hour, (name, phone) in ((11, ("Elena Morozova", "+7 901 234-56-78")), (15, ("Karim Nassar", "+7 902 345-67-89"))):
+            start = datetime.combine(tomorrow, time(hour, 0), tzinfo=tz)
+            try:
+                booking = create_booking(
+                    court=courts[2], start_at=start, end_at=start + timedelta(minutes=90), customer_name=name, customer_phone=phone
+                )
+            except BookingError:
+                continue
+            booking.source = Booking.Source.ONLINE
+            booking.public_token = uuid.uuid4()
+            booking.save(update_fields=["source", "public_token"])
+
         self.stdout.write(self.style.SUCCESS(f"Demo club ready with {made} bookings."))
+        self.stdout.write("Public booking page: /book/padel-arena-demo")
         self.stdout.write(f"Sign in as demo_owner, demo_manager or demo_desk with the password {PASSWORD}")
 
     def _bill(self, booking, products, seed, past):

@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import { useT } from "../i18n";
 
@@ -29,7 +30,9 @@ export function Modal({ title, subtitle, onClose, children, footer, wide = false
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  return (
+  // Rendered at the end of <body>, so a modal opened from inside a styled card
+  // (dark backgrounds, transforms) never inherits its colours or clipping.
+  return createPortal(
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={`modal${wide ? " modal-wide" : ""}`} role="dialog" aria-modal="true" aria-label={title} ref={dialog}>
         <header className="modal-head">
@@ -44,6 +47,7 @@ export function Modal({ title, subtitle, onClose, children, footer, wide = false
         <div className="modal-body">{children}</div>
         {footer && <footer className="modal-foot">{footer}</footer>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

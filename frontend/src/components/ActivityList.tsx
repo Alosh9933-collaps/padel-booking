@@ -13,6 +13,7 @@ const ICONS: Record<string, string> = {
   refund: "↩",
   sale: "🛒",
   shift: "🔐",
+  wallet: "💳",
 };
 
 /** Money that left the bill or the drawer is shown with a minus. */
@@ -66,6 +67,13 @@ function details(a: Activity, t: T, timeZone: string, currency: string): string 
       break;
     case "sale.created":
       parts.push(((d.items as string[] | undefined) ?? []).map((i) => isolate(i.replace(" x ", " × "))).join(", "), t(`method.${text(d.method)}`));
+      break;
+    case "wallet.topup":
+      parts.push(
+        [text(d.plan), t("wallet.getsCredit", { amount: money(text(d.credit), currency) }), t(`method.${text(d.method)}`)]
+          .filter(Boolean)
+          .join(" · "),
+      );
       break;
     case "sale.voided":
       if (d.reason) parts.push(text(d.reason));

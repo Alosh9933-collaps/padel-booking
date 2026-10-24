@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { Api, type Booking, type Court, type Slot, type WeeklyWeek } from "../api";
 import { BillModal, localIso } from "../components/Bill";
+import { BookingSearch } from "../components/BookingSearch";
 import { CustomerFields } from "../components/CustomerField";
 import { Modal } from "../components/Modal";
 import { addDays, clockTime, dateIn, ltr, duration, longDate, money, shortDate, timeRange, todayIn } from "../format";
@@ -67,6 +68,8 @@ export default function Schedule() {
   const [picked, setPicked] = useState<{ court: Court; start: number } | null>(null);
   const [openPlayCourt, setOpenPlayCourt] = useState<Court | null>(null);
   const [opened, setOpened] = useState<number | null>(null);
+  const [drag, setDrag] = useState<Drag | null>(null);
+  const [move, setMove] = useState<{ booking: Booking; start: number; end: number; court: Court } | null>(null);
   const now = useNow();
 
   useEffect(() => {
@@ -123,6 +126,53 @@ export default function Schedule() {
     };
   }, [data, timeline, now]);
 
+  // Dragging a booking: follow the pointer on the whole window until it is released.
+  useEffect(() => {
+    if (!drag) return;
+    const onMove = (e: PointerEvent) => {
+      const dy = e.clientY - drag.originY;
+      const dx = e.clientX - drag.originX;
+      const minutes = Math.round((dy * club.slot_minutes) / ROW_HEIGHT / 5) * 5;
+      let courtId = drag.courtId;
+      if (drag.mode === "move") {
+        const column = document
+          .elementsFromPoint(e.clientX, e.clientY)
+          .find((el) => (el as HTMLElement).dataset?.court) as HTMLElement | undefined;
+        if (column) courtId = Number(column.dataset.court);
+      }
+      const moved = drag.moved || Math.abs(dy) > 4 || Math.abs(dx) > 4;
+      if (minutes !== drag.minutes || courtId !== drag.courtId || moved !== drag.moved) {
+        setDrag({ ...drag, minutes, courtId, moved });
+      }
+    };
+    const onUp = () => {
+      const finished = drag;
+      setDrag(null);
+      if (!finished.moved) {
+        setOpened(finished.booking.id);
+        return;
+      }
+      const target = dragTarget(finished);
+      const court = data?.courts.find((c) => c.id === target.courtId);
+      const same =
+        target.start === Date.parse(finished.booking.start_at) &&
+        target.end === Date.parse(finished.booking.end_at) &&
+        target.courtId === finished.booking.court;
+      if (court && !same) setMove({ booking: finished.booking, start: target.start, end: target.end, court });
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [drag, data, club.slot_minutes]);
+
+  const startDrag = (booking: Booking, mode: Drag["mode"], e: React.PointerEvent) => {
+    e.preventDefault();
+    setDrag({ booking, mode, originX: e.clientX, originY: e.clientY, minutes: 0, courtId: booking.court, moved: false });
+  };
+
   const pick = (court: Court, slot: Slot) => {
     let start = Math.max(Date.parse(slot.start), Math.ceil(now / MINUTE) * MINUTE);
     // Clicking the free tail of a slot starts right after the booking before it.
@@ -140,6 +190,13 @@ export default function Schedule() {
           <p className="eyebrow">{t("nav.schedule")}</p>
           <h1>{longDate(date)}</h1>
         </div>
+        <div className="head-actions">
+        <BookingSearch
+          onPick={(b) => {
+            setDate(dateIn(b.start_at, club.timezone));
+            setOpened(b.id);
+          }}
+        />
         <div className="date-nav">
           <button className="btn" onClick={() => setDate(addDays(date, -1))} aria-label={t("schedule.prevDay")}>
             <span className="flip">‹</span>
@@ -157,6 +214,7 @@ export default function Schedule() {
           <button className="btn" onClick={() => setDate(addDays(date, 1))} aria-label={t("schedule.nextDay")}>
             <span className="flip">›</span>
           </button>
+        </div>
         </div>
       </header>
 
@@ -241,8 +299,10 @@ export default function Schedule() {
                   slots={data.slots[court.id] ?? []}
                   bookings={data.bookings.filter((b) => b.court === court.id)}
                   now={now}
+                  drag={drag}
                   onPick={(slot) => pick(court, slot)}
                   onOpen={(b) => setOpened(b.id)}
+                  onDragStart={startDrag}
                 />
               ))}
               {date === today && now > timeline.start && now < timeline.end && (
@@ -279,6 +339,16 @@ export default function Schedule() {
           }}
         />
       )}
+      {move && (
+        <MoveModal
+          {...move}
+          onClose={() => setMove(null)}
+          onDone={() => {
+            setMove(null);
+            reload();
+          }}
+        />
+      )}
       {opened !== null && (
         <BillModal
           bookingId={opened}
@@ -294,27 +364,53 @@ export default function Schedule() {
   );
 }
 
+interface Drag {
+  booking: Booking;
+  mode: "move" | "resize";
+  originX: number;
+  originY: number;
+  /** Minutes moved (or added to the end when resizing), on a 5-minute step. */
+  minutes: number;
+  courtId: number;
+  moved: boolean;
+}
+
+/** Where a dragged booking would land. */
+function dragTarget(drag: Drag) {
+  const start = Date.parse(drag.booking.start_at);
+  const end = Date.parse(drag.booking.end_at);
+  if (drag.mode === "resize") {
+    return { start, end: Math.max(start + 15 * MINUTE, end + drag.minutes * MINUTE), courtId: drag.booking.court };
+  }
+  return { start: start + drag.minutes * MINUTE, end: end + drag.minutes * MINUTE, courtId: drag.courtId };
+}
+
 function CourtColumn({
   court,
   timeline,
   slots,
   bookings,
   now,
+  drag,
   onPick,
   onOpen,
+  onDragStart,
 }: {
   court: Court;
   timeline: Timeline;
   slots: Slot[];
   bookings: Booking[];
   now: number;
+  drag: Drag | null;
   onPick: (slot: Slot) => void;
   onOpen: (booking: Booking) => void;
+  onDragStart: (booking: Booking, mode: Drag["mode"], e: React.PointerEvent) => void;
 }) {
   const t = useT();
   const { club } = useClub();
+  const ghost = drag?.moved && drag.courtId === court.id ? dragTarget(drag) : null;
   return (
-    <div className="board-col" style={{ height: timeline.rows.length * ROW_HEIGHT }}>
+    <div className="board-col" data-court={court.id} style={{ height: timeline.rows.length * ROW_HEIGHT }}>
       {slots.map((slot, i) => {
         const open = slot.price !== null && Date.parse(slot.end) - MINUTE > now;
         const style = { top: i * ROW_HEIGHT, height: ROW_HEIGHT - 2 };
@@ -347,6 +443,9 @@ function CourtColumn({
         const height = Math.max(y(timeline, end) - top, 20);
         const tall = height >= ROW_HEIGHT * 1.6;
         const due = !b.is_open && b.payment_status !== "paid";
+        // Finished games and running open play stay where they are.
+        const movable = !b.is_open && Date.parse(b.end_at) > now;
+        const dragging = drag?.moved && drag.booking.id === b.id;
         return (
           <div key={b.id}>
             {b.is_open && hold > end && (
@@ -360,12 +459,16 @@ function CourtColumn({
               </button>
             )}
             <button
-              className={`booking${b.is_open ? " is-live" : ""}${!b.is_open && end <= now ? " is-past" : ""}${due ? " is-due" : ""}`}
+              className={`booking${b.is_open ? " is-live" : ""}${!b.is_open && end <= now ? " is-past" : ""}${due ? " is-due" : ""}${movable ? " is-movable" : ""}${dragging ? " is-dragging" : ""}`}
               style={{ top, height }}
-              onClick={() => onOpen(b)}
+              // Mouse and touch go through the drag handlers; keyboard "clicks" (detail 0) open the bill.
+              onClick={(e) => (e.detail === 0 || !movable) && onOpen(b)}
+              onPointerDown={(e) => movable && e.button === 0 && onDragStart(b, "move", e)}
+              title={movable ? t("schedule.dragHint") : undefined}
             >
               <strong>
                 {b.is_open && <span className="live-dot" aria-hidden />}
+                {b.source === "online" && <span title={t("schedule.online")}>🌐</span>}
                 {b.series && <span aria-label={t("bill.weekly")}>↻</span>}
                 {b.customer_name}
               </strong>
@@ -382,10 +485,30 @@ function CourtColumn({
                   {due && <em>{t(`pay.${b.payment_status}`)}</em>}
                 </span>
               )}
+              {movable && (
+                <span
+                  className="resize-handle"
+                  aria-hidden
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    if (e.button === 0) onDragStart(b, "resize", e);
+                  }}
+                />
+              )}
             </button>
           </div>
         );
       })}
+
+      {ghost && (
+        <div
+          className="booking-ghost"
+          style={{ top: y(timeline, ghost.start), height: Math.max(y(timeline, ghost.end) - y(timeline, ghost.start), 20) }}
+          aria-hidden
+        >
+          {timeRange(new Date(ghost.start).toISOString(), new Date(ghost.end).toISOString(), club.timezone)}
+        </div>
+      )}
     </div>
   );
 }
@@ -657,3 +780,89 @@ function OpenPlayModal({
     </Modal>
   );
 }
+
+/** Confirm a drag: the new time or court, and the new price. */
+function MoveModal({
+  booking,
+  start,
+  end,
+  court,
+  onClose,
+  onDone,
+}: {
+  booking: Booking;
+  start: number;
+  end: number;
+  court: Court;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const t = useT();
+  const { club } = useClub();
+  const notify = useToast();
+  const startIso = new Date(start).toISOString();
+  const endIso = new Date(end).toISOString();
+  const [price, setPrice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    Api.quote(court.id, startIso, endIso)
+      .then((q) => setPrice(q.price))
+      .catch((e) => setError(errorText(e, t)));
+  }, [court.id, startIso, endIso, t]);
+
+  const confirm = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await Api.changeBooking(booking.id, { start_at: startIso, end_at: endIso, court: court.id });
+      notify(t("schedule.moved", { name: booking.customer_name }));
+      onDone();
+    } catch (err) {
+      setError(errorText(err, t));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={t("schedule.moveTitle", { name: booking.customer_name })}
+      onClose={onClose}
+      footer={
+        <>
+          <span className="total">
+            {price !== null ? money(price, club.currency) : "—"}
+            <small>{t("schedule.newPrice")}</small>
+          </span>
+          <button className="btn" onClick={onClose}>
+            {t("common.back")}
+          </button>
+          <button className="btn btn-primary" onClick={confirm} disabled={busy || price === null}>
+            {busy ? t("common.saving") : t("schedule.moveConfirm")}
+          </button>
+        </>
+      }
+    >
+      <div className="move-summary">
+        <div>
+          <small>{t("schedule.moveFrom")}</small>
+          <strong>{booking.court_name}</strong>
+          <span>{timeRange(booking.start_at, booking.end_at, club.timezone)}</span>
+          <span className="muted">{money(booking.price, club.currency)}</span>
+        </div>
+        <span className="move-arrow" aria-hidden>
+          →
+        </span>
+        <div className="move-to">
+          <small>{t("schedule.moveTo")}</small>
+          <strong>{court.name}</strong>
+          <span>{timeRange(startIso, endIso, club.timezone)}</span>
+          <span>{price !== null ? money(price, club.currency) : "…"}</span>
+        </div>
+      </div>
+      {error && <div className="alert">{error}</div>}
+    </Modal>
+  );
+}
+
