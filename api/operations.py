@@ -113,41 +113,26 @@ class CustomerViewSet(
                     match |= Q(phone__contains=digits)
                 qs = qs.filter(match)
 
+        # Every number is a subquery per customer. Joining the bookings instead would make
+        # Postgres group all booking rows and run the money subqueries once per booking.
+        def per_customer(queryset, value, key="customer"):
+            return Subquery(queryset.values(key).annotate(v=value).values("v"))
+
         # A visit is a confirmed booking that has started; "spent" is money actually received.
-        visited = Q(bookings__status=Booking.Status.CONFIRMED, bookings__start_at__lte=timezone.now())
-        paid = (
-            Payment.objects.filter(booking__customer=OuterRef("pk"))
-            .values("booking__customer")
-            .annotate(s=Sum("amount"))
-            .values("s")
-        )
-        refunded = (
-            Refund.objects.filter(booking__customer=OuterRef("pk"))
-            .values("booking__customer")
-            .annotate(s=Sum("amount"))
-            .values("s")
-        )
-        sales = (
-            Sale.objects.filter(customer=OuterRef("pk"), voided_at__isnull=True)
-            .values("customer")
-            .annotate(s=Sum("total"))
-            .values("s")
-        )
+        bookings = Booking.objects.filter(customer=OuterRef("pk"))
+        visited = bookings.filter(status=Booking.Status.CONFIRMED, start_at__lte=timezone.now())
+        paid = Payment.objects.filter(booking__customer=OuterRef("pk"))
+        refunded = Refund.objects.filter(booking__customer=OuterRef("pk"))
+        sales = Sale.objects.filter(customer=OuterRef("pk"), voided_at__isnull=True)
         zero = Value(ZERO, output_field=MONEY)
-        balance = (
-            BalanceEntry.objects.filter(customer=OuterRef("pk"))
-            .values("customer")
-            .annotate(s=Sum("amount"))
-            .values("s")
-        )
         return qs.annotate(
-            visits=Count("bookings", filter=visited, distinct=True),
-            no_shows=Count("bookings", filter=Q(bookings__status=Booking.Status.NO_SHOW), distinct=True),
-            last_visit=Max("bookings__start_at", filter=visited),
-            spent=Coalesce(Subquery(paid, output_field=MONEY), zero)
-            - Coalesce(Subquery(refunded, output_field=MONEY), zero)
-            + Coalesce(Subquery(sales, output_field=MONEY), zero),
-            balance=Coalesce(Subquery(balance, output_field=MONEY), zero),
+            visits=Coalesce(per_customer(visited, Count("id")), 0),
+            no_shows=Coalesce(per_customer(bookings.filter(status=Booking.Status.NO_SHOW), Count("id")), 0),
+            last_visit=per_customer(visited, Max("start_at")),
+            spent=Coalesce(per_customer(paid, Sum("amount"), "booking__customer"), zero)
+            - Coalesce(per_customer(refunded, Sum("amount"), "booking__customer"), zero)
+            + Coalesce(per_customer(sales, Sum("total")), zero),
+            balance=Coalesce(per_customer(BalanceEntry.objects.filter(customer=OuterRef("pk")), Sum("amount")), zero),
         ).order_by("name")
 
     @extend_schema(responses=BalanceEntrySerializer(many=True))

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Api, type Dashboard as DashboardData, type DashboardPeriod } from "../api";
 import { CategoryBadge } from "./Customers";
-import { hourLabel, money, shortDate, weekdayNames } from "../format";
+import { compactMoney, hourLabel, money, shortDate, weekdayNames } from "../format";
 import { errorText, useI18n, useT } from "../i18n";
 import { useClub } from "../session";
 
@@ -182,7 +182,9 @@ function Months({ months, currency }: { months: DashboardData["months"]; currenc
     <div className="month-bars" dir="ltr">
       {months.map((m, i) => (
         <div key={m.month} className={`month-bar${i === months.length - 1 ? " is-now" : ""}`}>
-          <span className="month-value">{money(m.revenue, currency)}</span>
+          <span className="month-value" title={money(m.revenue, currency)}>
+            {compactMoney(m.revenue, currency)}
+          </span>
           <span className="month-track">
             <span style={{ height: `${(Number(m.revenue) / max) * 100}%` }} />
           </span>

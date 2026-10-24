@@ -149,6 +149,17 @@ export function money(value: string | number | null, currency: string): string {
   return format.format(Number(value));
 }
 
+/** "₽1.8M": for chart labels where the full amount does not fit. */
+export function compactMoney(value: string | number, currency: string): string {
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency,
+    currencyDisplay: "narrowSymbol",
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(Number(value));
+}
+
 export function compactNumber(value: number): string {
   return new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
