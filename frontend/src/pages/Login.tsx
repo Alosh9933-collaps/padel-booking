@@ -57,7 +57,18 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
           <p className="muted">{t("login.hint")}</p>
           <label className="field">
             <span>{t("login.username")}</span>
-            <input autoFocus autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required dir="ltr" />
+            {/* Phone keyboards would otherwise capitalise "demo_owner" or "correct" it. */}
+            <input
+              autoFocus
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+              dir="ltr"
+            />
           </label>
           <label className="field">
             <span>{t("login.password")}</span>

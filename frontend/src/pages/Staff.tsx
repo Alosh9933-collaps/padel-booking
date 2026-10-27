@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import { Api, currentUsername, type Role, type StaffMember } from "../api";
 import { Modal } from "../components/Modal";
+import { SetStaffPasswordModal } from "../components/Password";
 import { dateTime } from "../format";
 import { errorText, useT } from "../i18n";
 import { useClub, useToast } from "../session";
@@ -16,6 +17,7 @@ export default function Staff() {
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<StaffMember | null>(null);
+  const [passwordFor, setPasswordFor] = useState<StaffMember | null>(null);
   const me = currentUsername();
   const isOwner = club.role === "owner";
   // Owners manage everyone; managers manage receptionists only (the API enforces this too).
@@ -116,9 +118,14 @@ export default function Staff() {
                       <td>{m.last_login ? dateTime(m.last_login, club.timezone) : t("staff.never")}</td>
                       <td className="num">
                         {editable && (
-                          <button className="btn btn-small btn-danger-ghost" onClick={() => setRemoving(m)}>
-                            {t("staff.remove")}
-                          </button>
+                          <span className="row-actions">
+                            <button className="btn btn-small" onClick={() => setPasswordFor(m)}>
+                              🔑 {t("password.button")}
+                            </button>
+                            <button className="btn btn-small btn-danger-ghost" onClick={() => setRemoving(m)}>
+                              {t("staff.remove")}
+                            </button>
+                          </span>
                         )}
                       </td>
                     </tr>
@@ -129,6 +136,8 @@ export default function Staff() {
           </div>
         </div>
       )}
+
+      {passwordFor && <SetStaffPasswordModal member={passwordFor} onClose={() => setPasswordFor(null)} />}
 
       {adding && (
         <AddStaffModal
@@ -207,7 +216,17 @@ function AddStaffModal({ roles, onClose, onSaved }: { roles: Role[]; onClose: ()
         <div className="field-row">
           <label className="field">
             <span>{t("staff.username")}</span>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} required maxLength={150} autoComplete="off" dir="ltr" />
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+              maxLength={150}
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              dir="ltr"
+            />
           </label>
           <label className="field">
             <span>{t("staff.name")}</span>

@@ -73,7 +73,7 @@ It is designed around the daily work of a real club in Russia: walk-in players w
 - **Right to left done properly:** logical CSS properties, and Unicode isolates for times, phone numbers and minus signs inside Arabic text, so "18:30–20:00" never comes out reversed.
 - **Query performance:** the customer list builds visits, money spent and balance with per-customer subqueries. On 2,000 bookings that took the query from 1.1 s to 20 ms.
 - **Telegram with no extra infrastructure:** a long-polling bot as a management command, and messages sent only after the database transaction commits.
-- **Tests:** 174 backend tests on PostgreSQL, run by GitHub Actions on every push together with the frontend build, a check for missing migrations and a check of the API schema. They cover overlaps and concurrent requests, permissions per role, money edge cases, the wallet, the dashboard, the public API, and prepayment, including late payments, refunds and YooKassa with mocked network calls.
+- **Tests:** 182 backend tests on PostgreSQL, run by GitHub Actions on every push together with the frontend build, a check for missing migrations and a check of the API schema. They cover overlaps and concurrent requests, permissions per role, money edge cases, the wallet, the dashboard, the public API, and prepayment, including late payments, refunds and YooKassa with mocked network calls.
 
 ## Tech stack
 

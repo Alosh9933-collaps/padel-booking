@@ -678,6 +678,10 @@ export const Api = {
   changeStaffRole: (id: number, role: Role) =>
     api<StaffMember>(`/staff/${id}/`, { method: "PATCH", body: { role } }),
   removeStaff: (id: number) => api<void>(`/staff/${id}/`, { method: "DELETE" }),
+  setStaffPassword: (id: number, password: string) =>
+    api<void>(`/staff/${id}/password/`, { method: "POST", body: { password } }),
+  changePassword: (current_password: string, new_password: string) =>
+    api<void>("/auth/password/", { method: "POST", body: { current_password, new_password } }),
 
   revenue: (club: number, from: string, to: string) =>
     api<RevenueReport>("/reports/revenue/", { query: { club, from, to } }),

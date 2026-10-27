@@ -971,6 +971,8 @@ button.act-row:hover { background: #f6f8fb; }
   font: 600 17px var(--sans); letter-spacing: 0.08em; direction: ltr;
 }
 
+.row-actions { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+
 /* ---------- QR code for phones ---------- */
 .qr-box { display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
 .qr { width: min(260px, 70vw); height: auto; border: 1px solid var(--line); border-radius: 12px; }

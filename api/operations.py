@@ -3,8 +3,6 @@
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
-from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count, F, Max, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
@@ -45,6 +43,7 @@ from .serializers import (
     StaffCreateSerializer,
     StaffSerializer,
 )
+from .accounts import NewPasswordSerializer, check_new_password
 from .views import MANAGERS_ONLY, ManagedByClubMixin, _local_range, parse_date
 
 
@@ -236,10 +235,7 @@ class StaffViewSet(
             password = data.get("password") or ""
             if not password:
                 raise ValidationError({"password": "Set a password for the new account."})
-            try:
-                validate_password(password)
-            except DjangoValidationError as exc:
-                raise ValidationError({"password": list(exc.messages)})
+            check_new_password(password, User(username=data["username"]))
             user = User.objects.create_user(
                 data["username"], password=password, first_name=data.get("first_name", "")
             )
@@ -262,6 +258,26 @@ class StaffViewSet(
             raise PermissionDenied("You cannot remove yourself.")
         self._check_can_assign(membership.club, membership.role)
         membership.delete()
+
+    @extend_schema(request=NewPasswordSerializer, responses={204: None})
+    @action(detail=True, methods=["post"])
+    def password(self, request, pk=None):
+        """Give a staff member a new password, for example when they forgot theirs."""
+        membership = self.get_object()
+        user = membership.user
+        if user.pk == request.user.pk:
+            raise PermissionDenied("Change your own password from your profile, with your current password.")
+        # One account can work at several clubs: only someone allowed to manage them at
+        # every one of those clubs may set their password.
+        for other in Membership.objects.filter(user=user).select_related("club"):
+            self._check_can_assign(other.club, other.role)
+        serializer = NewPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        password = serializer.validated_data["password"]
+        check_new_password(password, user)
+        user.set_password(password)
+        user.save(update_fields=["password"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class DailyReportView(APIView):

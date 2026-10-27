@@ -14,6 +14,7 @@ import {
 import { CourtArt, Logo } from "./components/Brand";
 import { LanguageSwitch } from "./components/LanguageSwitch";
 import { NotificationCenter } from "./components/Notifications";
+import { ChangePasswordModal } from "./components/Password";
 import { errorText, useI18n } from "./i18n";
 import ActivityLog from "./pages/ActivityLog";
 import Courts from "./pages/Courts";
@@ -80,6 +81,7 @@ function Shell({ onLogout }: { onLogout: () => void }) {
   const [clubs, setClubs] = useState<Club[] | null>(null);
   const [clubId, setClubId] = useState<number | null>(rememberedClubId);
   const [error, setError] = useState<string | null>(null);
+  const [changingPassword, setChangingPassword] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -174,6 +176,14 @@ function Shell({ onLogout }: { onLogout: () => void }) {
               <strong>{currentUsername() || t("shell.signedIn")}</strong>
               <span className={`role role-${value.club.role}`}>{t(`role.${value.club.role}`)}</span>
             </div>
+            <button
+              className="icon-btn on-dark"
+              onClick={() => setChangingPassword(true)}
+              title={t("password.changeTitle")}
+              aria-label={t("password.changeTitle")}
+            >
+              🔑
+            </button>
             <button className="icon-btn on-dark" onClick={signOut} title={t("shell.signOut")} aria-label={t("shell.signOut")}>
               ⎋
             </button>
@@ -196,6 +206,7 @@ function Shell({ onLogout }: { onLogout: () => void }) {
           </Routes>
         </main>
       </div>
+      {changingPassword && <ChangePasswordModal onClose={() => setChangingPassword(false)} />}
     </ClubContext.Provider>
   );
 }
