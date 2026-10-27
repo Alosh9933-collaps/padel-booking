@@ -8,7 +8,7 @@ double bookings**, even when requests arrive at the same moment.
 
 > Status: backend API with Django Admin as the first interface. No frontend yet.
 
-<!-- Add a screenshot of /api/docs/ (Swagger UI) here -->
+![Swagger UI](docs/screenshots/swagger.png)
 
 ## Features
 
@@ -23,6 +23,13 @@ double bookings**, even when requests arrive at the same moment.
 - Revenue report per club, per court and per day
 - OpenAPI/Swagger documentation
 - Automated tests and GitHub Actions CI
+
+## Where to start reading
+
+1. `bookings/models.py`: the overlap exclusion constraint
+2. `bookings/services.py`: validation, pricing, booking creation
+3. `clubs/access.py`: role-aware club scoping
+4. `bookings/tests/` and `api/tests/`: behavior, including the concurrency test
 
 ## Tech stack
 
@@ -71,6 +78,8 @@ To use Django Admin: `python manage.py createsuperuser`, then open `/admin/`.
 The database settings can be overridden with environment variables
 (`DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`). The defaults match `docker-compose.yml`.
 
+The database is exposed on host port 5433 (see docker-compose.yml) to avoid clashing with a local PostgreSQL.
+
 ## Tests
 
 ```bash
@@ -79,6 +88,21 @@ python manage.py test
 
 This includes a concurrency test that sends several simultaneous booking requests for the
 same slot and checks that exactly one succeeds.
+
+## Example
+
+```http
+POST /api/bookings/
+{
+  "court": 1,
+  "start_at": "2026-11-02T18:00:00+03:00",
+  "end_at": "2026-11-02T19:30:00+03:00",
+  "customer_name": "Anna"
+}
+```
+
+`201 Created` returns the booking with its price (4500.00 for 1.5 hours at 3000/hour).
+The same request again returns `409 {"detail": "This time slot is already booked."}`.
 
 ## API overview
 
@@ -106,7 +130,7 @@ would have a race condition; the constraint cannot be bypassed. Ranges are half-
 
 **Multi-tenancy with a `Club` foreign key.** One database, every table points back to a club.
 Access goes through `Membership` (user, club, role). Every queryset is scoped through
-helpers in `clubs/access.py`, and other clubs' objects look like they do not exist (404).
+helpers in `clubs/access.py`, and other clubs' objects look like they do not exist (404or "invalid id" when creating).
 
 **Business logic lives in a service layer** (`bookings/services.py`), so API views and the
 admin share the same rules for validation, pricing and creating bookings.
