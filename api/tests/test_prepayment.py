@@ -133,6 +133,17 @@ class PrepaymentTests(PrepaymentTestBase):
         held.refresh_from_db()
         self.assertEqual((held.status, held.hold_until), ("confirmed", None))
 
+    def test_money_is_kept_on_the_bill_when_staff_lowered_the_price_meanwhile(self):
+        booked = self.book()
+        held = Booking.objects.get(public_token__isnull=False)
+        self.client.force_authenticate(self.user_a)
+        with frozen(at(2, 9, 2)):
+            self.client.patch(reverse("booking-detail", args=[held.pk]), {"end_at": "2026-11-03T19:00:00+03:00"}, format="json")
+        self.client.force_authenticate(None)
+        self.pay(booked)
+        self.assertEqual(Payment.objects.get().amount, Decimal("4500.00"))  # all of it, though the bill is now 3000
+        self.assertEqual(OnlinePayment.objects.get().status, "succeeded")
+
     def test_staff_cannot_enter_online_payments_by_hand(self):
         self.client.force_authenticate(self.user_a)
         response = self.client.post(
@@ -201,3 +212,7 @@ class YooKassaTests(PrepaymentTestBase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(Payment.objects.get().method, "online")
         self.assertEqual(self.yookassa.requests[-1].get_method(), "GET")  # the status was asked, not taken from the body
+
+    def test_a_malformed_webhook_is_ignored(self):
+        for body in ([1, 2], {"object": "x"}, {}):
+            self.assertEqual(self.client.post(reverse("yookassa-webhook"), body, format="json").status_code, 200)

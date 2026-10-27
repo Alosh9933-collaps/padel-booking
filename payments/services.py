@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from django.db import transaction
 from django.utils import timezone
 
-from bookings.billing import add_payment, add_refund
+from bookings.billing import add_refund
 from bookings.models import Booking, Payment
 from bookings.services import BookingError, cancel_booking
 from cashdesk.services import record
@@ -82,7 +82,13 @@ def succeeded(payment):
 
     booking = Booking.objects.select_for_update().select_related("court__club").get(pk=payment.booking_id)
     if booking.status == Booking.Status.CONFIRMED:
-        add_payment(booking, payment.amount, Payment.Method.ONLINE, payer_name=booking.customer_name)  # ends the hold
+        # The money is already in, so the bill takes all of it even if staff lowered the price
+        # meanwhile (add_payment would refuse that as an overpayment); any surplus shows as owed back.
+        Payment.objects.create(
+            booking=booking, amount=payment.amount, method=Payment.Method.ONLINE, payer_name=booking.customer_name
+        )
+        booking.hold_until = None
+        booking.save(update_fields=["hold_until"])
         record(
             booking.court.club,
             None,

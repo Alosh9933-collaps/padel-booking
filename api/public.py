@@ -424,7 +424,9 @@ class YooKassaWebhookView(PublicView):
 
     @extend_schema(request=None, responses={200: None})
     def post(self, request):
-        provider_id = (request.data.get("object") or {}).get("id", "")
+        body = request.data if isinstance(request.data, dict) else {}
+        event = body.get("object") if isinstance(body.get("object"), dict) else {}
+        provider_id = event.get("id", "")
         payment = OnlinePayment.objects.filter(provider="yookassa", provider_id=str(provider_id)).first()
         if payment is not None:
             try:

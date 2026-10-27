@@ -1,6 +1,8 @@
 # Padel Booking
 
-A full-stack system for running a padel club: court bookings, a buffet on the same bill, prepaid packages, cash-up and shifts, an owner dashboard, and an online booking page for players with Telegram confirmations. It works in English, Arabic (right to left) and Russian.
+[![CI](https://github.com/Alosh9933-collaps/padel-booking-api/actions/workflows/ci.yml/badge.svg)](https://github.com/Alosh9933-collaps/padel-booking-api/actions/workflows/ci.yml)
+
+A full-stack system for running a padel club: court bookings, a buffet on the same bill, prepaid packages, cash-up and shifts, an owner dashboard, and an online booking page where players pay up front and staff are notified at once. It works in English, Arabic (right to left) and Russian.
 
 ![Schedule](docs/screenshots/02-schedule.png)
 
@@ -47,8 +49,10 @@ It is designed around the daily work of a real club in Russia: walk-in players w
 | Daily cash-up by method | Counter sale with the change to give |
 | ![Customers](docs/screenshots/07-customers.png) | ![Loyalty and packages](docs/screenshots/08-loyalty.png) |
 | Customers with visits, loyalty progress and balances | Loyalty rules, categories and prepaid packages |
-| ![Online booking](docs/screenshots/10-online-booking.png) | ![Arabic, right to left](docs/screenshots/09-schedule-arabic.png) |
-| Public booking page for players | The whole app in Arabic, right to left |
+| ![Online booking](docs/screenshots/10-online-booking.png) | ![Payment page](docs/screenshots/12-payment.png) |
+| Public booking page: any length, exact prices | Prepayment (the demo provider; YooKassa in production) |
+| ![Staff notification](docs/screenshots/13-notification.png) | ![Arabic, right to left](docs/screenshots/09-schedule-arabic.png) |
+| Staff see a paid online booking at once | The whole app in Arabic, right to left |
 
 <p align="center"><img src="docs/screenshots/11-online-booking-phone.png" width="280" alt="Online booking on a phone"></p>
 
@@ -69,7 +73,7 @@ It is designed around the daily work of a real club in Russia: walk-in players w
 - **Right to left done properly:** logical CSS properties, and Unicode isolates for times, phone numbers and minus signs inside Arabic text, so "18:30–20:00" never comes out reversed.
 - **Query performance:** the customer list builds visits, money spent and balance with per-customer subqueries. On 2,000 bookings that took the query from 1.1 s to 20 ms.
 - **Telegram with no extra infrastructure:** a long-polling bot as a management command, and messages sent only after the database transaction commits.
-- **Tests:** 172 backend tests on PostgreSQL. They cover overlaps and concurrent requests, permissions per role, money edge cases, the wallet, the dashboard, the public API, and prepayment, including late payments, refunds and YooKassa with mocked network calls.
+- **Tests:** 174 backend tests on PostgreSQL, run by GitHub Actions on every push together with the frontend build, a check for missing migrations and a check of the API schema. They cover overlaps and concurrent requests, permissions per role, money edge cases, the wallet, the dashboard, the public API, and prepayment, including late payments, refunds and YooKassa with mocked network calls.
 
 ## Tech stack
 
