@@ -106,6 +106,12 @@ npm run dev                          # app on http://localhost:5173
 - API docs (Swagger): http://127.0.0.1:8000/api/docs/
 - Tests: `python manage.py test` (the database must be running)
 
+**Showing it in person (Windows):** double-click `demo.cmd`.
+- It starts the database, the API and the website for the demo club, which has its own database and gets fresh dates once a day.
+- It opens the admin site and prints the address phones on the same Wi-Fi can use.
+- In Club settings, the booking page link has a QR code button, so customers can book from their own phones while the staff side gets the notification.
+- Press Enter in the window to stop. `demo.cmd -Reset` rebuilds the demo club; `-Detach` and `-Stop` run it in the background.
+
 Online prepayment uses a demo payment page in development, so the whole flow can be tried without real money. For real payments:
 - Set `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY` and `PUBLIC_SITE_URL`.
 - Point the YooKassa webhook to `/api/public/payments/yookassa/`.

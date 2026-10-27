@@ -3,6 +3,7 @@ import { useState, type FormEvent } from "react";
 import { Api, type Club } from "../api";
 import { errorText, useT } from "../i18n";
 import { useClub, useToast } from "../session";
+import { QrModal } from "./QrCode";
 
 /** Owners and managers: the public booking page and Telegram alerts. */
 export function OnlineSettings() {
@@ -17,6 +18,7 @@ export function OnlineSettings() {
   const [chatId, setChatId] = useState(club.telegram_chat_id);
   const [language, setLanguage] = useState<Club["language"]>(club.language);
   const [copied, setCopied] = useState(false);
+  const [showQr, setShowQr] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -88,6 +90,9 @@ export function OnlineSettings() {
             <a className="btn btn-small" href={link} target="_blank" rel="noreferrer">
               {t("online.open")} ↗
             </a>
+            <button type="button" className="btn btn-small btn-primary" onClick={() => setShowQr(true)}>
+              ▦ {t("qr.button")}
+            </button>
           </div>
         )}
         <label className="field">
@@ -158,6 +163,7 @@ export function OnlineSettings() {
           </div>
         )}
       </form>
+      {showQr && <QrModal link={link} onClose={() => setShowQr(false)} />}
     </section>
   );
 }
